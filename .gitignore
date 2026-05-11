@@ -39,3 +39,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# claude code local settings (per-developer)
+.claude/settings.local.json
+
+# additional secret patterns
+*.key
+id_rsa*
+credentials.json
+.aws/
+.ssh/

@@ -1,36 +1,127 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TradingView Gratis 📈
 
-## Getting Started
+> **Una alternativa open-source y 100% gratis a TradingView Pro, pensada para LATAM.**
+> Velas en vivo, indicadores propios, watchlist, multi-timeframe — sin pagar USD, sin login, sin ads.
 
-First, run the development server:
+Plataforma de charts crypto construida sobre los datos públicos de **Binance** (WebSocket) y la misma librería de render que usa TradingView ([`lightweight-charts`](https://github.com/tradingview/lightweight-charts)).
+
+---
+
+## ✨ Features
+
+- 📊 **Velas en vivo** vía WebSocket de Binance (sin API key)
+- 🔍 **Búsqueda de símbolo** sobre todos los pares USDT del exchange
+- ⏱️ **Multi-timeframe**: 1m / 5m / 15m / 1h / 4h / 1d / 1w
+- 📐 **Indicadores client-side**: EMA 20/50/200, RSI 14, MACD 12/26/9, Volumen
+- 👁️ **Watchlist** con precios y cambio 24h actualizándose en tiempo real
+- 🎨 **Visual idéntica a TradingView** (paleta, fuentes, layout)
+- 💾 **Persistencia** en localStorage (símbolo, timeframe, indicadores)
+- 🔌 **Reconexión robusta** del WebSocket con backoff exponencial
+- 🌐 100% client-side — deploy estático en Vercel/Cloudflare
+
+## 🚀 Empezar
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Abrí [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 🛠️ Stack
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Capa | Tech |
+|---|---|
+| Framework | Next.js 16 (App Router) |
+| Lenguaje | TypeScript |
+| Estilos | Tailwind CSS 4 + shadcn/ui |
+| Charts | [lightweight-charts](https://github.com/tradingview/lightweight-charts) v5 |
+| Estado | Zustand (con persistencia) |
+| Iconos | lucide-react |
+| Datos | Binance Public REST + WebSocket |
 
-## Learn More
+## 📐 Arquitectura
 
-To learn more about Next.js, take a look at the following resources:
+```
+src/
+├── app/
+│   ├── layout.tsx          # Root, fuente Inter, TooltipProvider, dark
+│   ├── page.tsx            # Dashboard armando el layout
+│   └── globals.css         # Paleta TradingView
+├── components/
+│   ├── chart/
+│   │   ├── PriceChart.tsx     # Chart core (lightweight-charts + panes)
+│   │   ├── SymbolSelector.tsx # Búsqueda de pares USDT
+│   │   ├── TimeframeSelector.tsx
+│   │   └── IndicatorMenu.tsx  # Toggle EMA/RSI/MACD/Volume
+│   ├── layout/
+│   │   ├── Header.tsx
+│   │   ├── LeftSidebar.tsx    # Iconos drawing tools (visual)
+│   │   ├── RightSidebar.tsx
+│   │   └── BottomPanel.tsx    # Stats 24h
+│   ├── watchlist/
+│   │   └── Watchlist.tsx      # Precios live multi-símbolo
+│   └── ui/                    # shadcn primitives
+└── lib/
+    ├── binance/
+    │   ├── rest.ts            # klines / ticker / exchangeInfo
+    │   ├── ws.ts              # WS multiplex + auto-reconnect
+    │   └── types.ts
+    ├── indicators/
+    │   └── index.ts           # SMA, EMA, RSI (Wilder), MACD
+    ├── store/
+    │   └── chart-store.ts     # Zustand global state
+    └── format.ts              # formatPrice / formatPct / formatVolume
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 🌐 Deploy a Vercel
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npm i -g vercel
+vercel
+```
 
-## Deploy on Vercel
+O conectá el repo en [vercel.com/new](https://vercel.com/new) y deploy automático. No hay variables de entorno — todo es cliente.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 🧠 Cómo funciona
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Datos históricos
+Al abrir un símbolo se hace un `GET /api/v3/klines` (REST) que trae las últimas **1000 velas** del par + timeframe activo. Se renderizan instantáneamente.
+
+### Datos en vivo
+Una única conexión WebSocket multiplexada (`stream.binance.com`) recibe:
+- `<symbol>@kline_<interval>` → updates de la vela actual + cierre de velas
+- `<symbol>@miniTicker` → tickers del watchlist
+
+Al reconectarse (Binance corta el WS cada 24h) se vuelven a suscribir todos los streams activos con backoff exponencial.
+
+### Indicadores
+Se calculan **client-side** sobre el array de velas en cada update. Implementaciones puras de TypeScript:
+- `EMA`: seeded con SMA del primer período, luego `close * k + prev * (1-k)`
+- `RSI`: Wilder (suavizado exponencial sobre ganancias/pérdidas, período 14)
+- `MACD`: EMA(12) − EMA(26), signal = EMA(9) sobre MACD line
+
+Para 1000 velas y panes múltiples el costo es despreciable.
+
+## ⚠️ Qué NO incluye (todavía)
+
+- ❌ Pine Script (propietario de TradingView, no se puede clonar)
+- ❌ Drawing tools persistentes (Fibo, trend lines arrastrables)
+- ❌ Replay bar-by-bar
+- ❌ Alertas server-side (siguiente video de la serie)
+- ❌ Trading real (bot con API privada — video 4)
+
+## 📺 Serie de videos
+
+Este repo es la base de la serie **"TradingView Gratis"**:
+
+1. ✅ **Video 1 — Base**: lo que ves acá
+2. 🔜 **Video 2 — Alertas**: Supabase + Telegram bot
+3. 🔜 **Video 3 — Indicadores AI**: SuperTrend, Ichimoku, custom con Claude
+4. 🔜 **Video 4 — Bot que opera**: API privada Binance + ejecución
+
+## 📄 Licencia
+
+MIT — usalo, forkealo, monetizalo, lo que quieras.
+
+`lightweight-charts` es Apache 2.0 con atribución a TradingView — la atribución vive en el footer/UI por requerimiento de la licencia.
