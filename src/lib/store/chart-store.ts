@@ -12,7 +12,7 @@ export type IndicatorKey =
   | "macd"
   | "volume";
 
-export type DrawingTool = "cursor" | "hline" | "eraser";
+export type DrawingTool = "cursor" | "hline" | "measure" | "eraser";
 
 export interface PriceLine {
   id: string;

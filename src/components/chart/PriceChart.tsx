@@ -23,6 +23,28 @@ import {
 } from "@/lib/store/chart-store";
 import { formatPrice, formatVolume } from "@/lib/format";
 import { IndicatorPill } from "./IndicatorPill";
+import { MeasureOverlay } from "./MeasureOverlay";
+
+interface MeasurePoint {
+  time: number;
+  price: number;
+}
+interface MeasureState {
+  phase: "idle" | "placing" | "done";
+  a: MeasurePoint | null;
+  b: MeasurePoint | null;
+}
+const INITIAL_MEASURE: MeasureState = { phase: "idle", a: null, b: null };
+
+function durationLabel(aTime: number, bTime: number): string {
+  const diff = Math.abs(bTime - aTime);
+  const days = Math.floor(diff / 86400);
+  const hours = Math.floor((diff % 86400) / 3600);
+  const minutes = Math.floor((diff % 3600) / 60);
+  if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  return `${minutes}m`;
+}
 
 interface Props {
   symbol: string;
@@ -110,6 +132,10 @@ export function PriceChart({ symbol, timeframe }: Props) {
   const [lastPrice, setLastPrice] = useState<{ value: number; pct: number } | null>(null);
   const [lastValues, setLastValues] = useState<LastValues>({});
   const [paneOffsets, setPaneOffsets] = useState<PaneOffset[]>([]);
+  const [measure, setMeasure] = useState<MeasureState>(INITIAL_MEASURE);
+  const [renderTick, setRenderTick] = useState(0);
+  const measureRef = useRef(measure);
+  measureRef.current = measure;
 
   // Helper — compute pane top offsets from chart layout
   function recomputePaneOffsets() {
@@ -195,15 +221,59 @@ export function PriceChart({ symbol, timeframe }: Props) {
 
     // Click handler — add horizontal price line when hline tool is active
     chart.subscribeClick((param) => {
-      if (toolRef.current !== "hline") return;
       if (!param.point || !candleSeriesRef.current) return;
       const price = candleSeriesRef.current.coordinateToPrice(param.point.y);
       if (price === null || !isFinite(price)) return;
-      addPriceLineRef.current(price, symbolRef.current);
+
+      if (toolRef.current === "hline") {
+        addPriceLineRef.current(price, symbolRef.current);
+        return;
+      }
+
+      if (toolRef.current === "measure") {
+        if (!param.time) return;
+        const time = Number(param.time);
+        const current = measureRef.current;
+        if (current.phase === "idle") {
+          setMeasure({
+            phase: "placing",
+            a: { time, price },
+            b: { time, price },
+          });
+        } else if (current.phase === "placing") {
+          setMeasure({
+            phase: "done",
+            a: current.a,
+            b: { time, price },
+          });
+        } else {
+          setMeasure({
+            phase: "placing",
+            a: { time, price },
+            b: { time, price },
+          });
+        }
+      }
     });
 
     // Crosshair handler
     chart.subscribeCrosshairMove((param) => {
+      if (
+        toolRef.current === "measure" &&
+        measureRef.current.phase === "placing" &&
+        param.point &&
+        param.time &&
+        candleSeriesRef.current
+      ) {
+        const price = candleSeriesRef.current.coordinateToPrice(param.point.y);
+        if (price !== null && isFinite(price)) {
+          const time = Number(param.time);
+          setMeasure((prev) =>
+            prev.phase === "placing" ? { ...prev, b: { time, price } } : prev,
+          );
+        }
+      }
+
       if (!param.time || !candleSeriesRef.current) {
         setHover(null);
         return;
@@ -227,6 +297,12 @@ export function PriceChart({ symbol, timeframe }: Props) {
       }
     });
 
+    // Re-render measure overlay on pan / zoom so pixel coords stay in sync
+    const tsRangeHandler = () => setRenderTick((t) => t + 1);
+    chart.timeScale().subscribeVisibleTimeRangeChange(tsRangeHandler);
+    const logicalRangeHandler = () => setRenderTick((t) => t + 1);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(logicalRangeHandler);
+
     // ResizeObserver — recompute pane offsets when chart container resizes
     const ro = new ResizeObserver(() => {
       requestAnimationFrame(() => recomputePaneOffsets());
@@ -235,6 +311,8 @@ export function PriceChart({ symbol, timeframe }: Props) {
     recomputePaneOffsets();
 
     return () => {
+      chart.timeScale().unsubscribeVisibleTimeRangeChange(tsRangeHandler);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(logicalRangeHandler);
       ro.disconnect();
       chart.remove();
       chartRef.current = null;
@@ -449,11 +527,13 @@ export function PriceChart({ symbol, timeframe }: Props) {
     }
   }, [priceLines, symbol]);
 
-  // Cursor style when hline tool is active
+  // Cursor style when drawing tools are active + reset measure on tool change
   useEffect(() => {
     if (containerRef.current) {
-      containerRef.current.style.cursor = tool === "hline" ? "crosshair" : "";
+      containerRef.current.style.cursor =
+        tool === "hline" || tool === "measure" ? "crosshair" : "";
     }
+    if (tool !== "measure") setMeasure(INITIAL_MEASURE);
   }, [tool]);
 
   function updateEMAs() {
@@ -654,9 +734,56 @@ export function PriceChart({ symbol, timeframe }: Props) {
   const rsiPaneIdx = 1;
   const macdPaneIdx = indicators.rsi ? 2 : 1;
 
+  let measureRender: React.ReactNode = null;
+  if (
+    measure.a &&
+    measure.b &&
+    chartRef.current &&
+    candleSeriesRef.current
+  ) {
+    const ts = chartRef.current.timeScale();
+    const aX = ts.timeToCoordinate(measure.a.time as UTCTimestamp);
+    const bX = ts.timeToCoordinate(measure.b.time as UTCTimestamp);
+    const aY = candleSeriesRef.current.priceToCoordinate(measure.a.price);
+    const bY = candleSeriesRef.current.priceToCoordinate(measure.b.price);
+
+    if (aX !== null && bX !== null && aY !== null && bY !== null) {
+      const priceDiff = measure.b.price - measure.a.price;
+      const pctChange =
+        measure.a.price === 0 ? 0 : (priceDiff / measure.a.price) * 100;
+      const isUp = priceDiff >= 0;
+      const start = Math.min(measure.a.time, measure.b.time);
+      const end = Math.max(measure.a.time, measure.b.time);
+      const inRange = candlesRef.current.filter(
+        (c) => c.time >= start && c.time <= end,
+      );
+      const bars = inRange.length;
+      const volume = inRange.reduce((s, c) => s + c.volume, 0);
+      const dur = durationLabel(measure.a.time, measure.b.time);
+
+      measureRender = (
+        <MeasureOverlay
+          aX={aX}
+          aY={aY}
+          bX={bX}
+          bY={bY}
+          priceDiff={priceDiff}
+          pctChange={pctChange}
+          bars={bars}
+          volume={volume}
+          durationText={dur}
+          isUp={isUp}
+          isPreview={measure.phase === "placing"}
+        />
+      );
+    }
+  }
+  void renderTick;
+
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
+      {measureRender}
 
       {/* Top-left of main pane: symbol info + OHLC + Volume pill + EMA pills */}
       <div
