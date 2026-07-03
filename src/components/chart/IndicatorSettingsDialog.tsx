@@ -22,6 +22,9 @@ const TITLES: Record<IndicatorKey, string> = {
   rsi: "RSI",
   macd: "MACD",
   volume: "Volumen",
+  bb: "Bollinger Bands",
+  stoch: "Stochastic",
+  supertrend: "SuperTrend",
 };
 
 export function IndicatorSettingsDialog() {
@@ -73,26 +76,10 @@ interface FormProps {
 
 function SettingsForm({ target, config, onSave, onReset }: FormProps) {
   // Local draft state to avoid recalculating chart on every keystroke
-  const [draft, setDraft] = useState({
-    ema20: config.ema20,
-    ema50: config.ema50,
-    ema200: config.ema200,
-    rsi: config.rsi,
-    macdFast: config.macdFast,
-    macdSlow: config.macdSlow,
-    macdSignal: config.macdSignal,
-  });
+  const [draft, setDraft] = useState({ ...config });
 
   useEffect(() => {
-    setDraft({
-      ema20: config.ema20,
-      ema50: config.ema50,
-      ema200: config.ema200,
-      rsi: config.rsi,
-      macdFast: config.macdFast,
-      macdSlow: config.macdSlow,
-      macdSignal: config.macdSignal,
-    });
+    setDraft({ ...config });
   }, [config, target]);
 
   function save() {
@@ -105,6 +92,22 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
         macdFast: clamp(draft.macdFast, 2, 100),
         macdSlow: clamp(draft.macdSlow, 2, 200),
         macdSignal: clamp(draft.macdSignal, 2, 100),
+      });
+    else if (target === "bb")
+      onSave({
+        bbPeriod: clamp(draft.bbPeriod, 2, 200),
+        bbStdDev: clamp(draft.bbStdDev, 0.5, 5),
+      });
+    else if (target === "stoch")
+      onSave({
+        stochK: clamp(draft.stochK, 2, 100),
+        stochD: clamp(draft.stochD, 2, 100),
+        stochSmooth: clamp(draft.stochSmooth, 1, 50),
+      });
+    else if (target === "supertrend")
+      onSave({
+        stPeriod: clamp(draft.stPeriod, 2, 100),
+        stMultiplier: clamp(draft.stMultiplier, 0.5, 10),
       });
     else if (target === "volume") onSave({});
   }
@@ -141,6 +144,53 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
             label="Señal"
             value={draft.macdSignal}
             onChange={(n) => setDraft((d) => ({ ...d, macdSignal: n }))}
+          />
+        </div>
+      )}
+      {target === "bb" && (
+        <div className="grid grid-cols-2 gap-2">
+          <Field
+            label="Período"
+            value={draft.bbPeriod}
+            onChange={(n) => setDraft((d) => ({ ...d, bbPeriod: n }))}
+          />
+          <Field
+            label="Desv. Estándar"
+            value={draft.bbStdDev}
+            onChange={(n) => setDraft((d) => ({ ...d, bbStdDev: n }))}
+          />
+        </div>
+      )}
+      {target === "stoch" && (
+        <div className="grid grid-cols-3 gap-2">
+          <Field
+            label="%K"
+            value={draft.stochK}
+            onChange={(n) => setDraft((d) => ({ ...d, stochK: n }))}
+          />
+          <Field
+            label="%D"
+            value={draft.stochD}
+            onChange={(n) => setDraft((d) => ({ ...d, stochD: n }))}
+          />
+          <Field
+            label="Suavizado"
+            value={draft.stochSmooth}
+            onChange={(n) => setDraft((d) => ({ ...d, stochSmooth: n }))}
+          />
+        </div>
+      )}
+      {target === "supertrend" && (
+        <div className="grid grid-cols-2 gap-2">
+          <Field
+            label="Período ATR"
+            value={draft.stPeriod}
+            onChange={(n) => setDraft((d) => ({ ...d, stPeriod: n }))}
+          />
+          <Field
+            label="Multiplicador"
+            value={draft.stMultiplier}
+            onChange={(n) => setDraft((d) => ({ ...d, stMultiplier: n }))}
           />
         </div>
       )}
