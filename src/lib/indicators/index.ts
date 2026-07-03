@@ -277,3 +277,181 @@ export function superTrend(
   void prevDir;
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// VWAP — Volume Weighted Average Price with standard-deviation bands
+// ---------------------------------------------------------------------------
+
+export interface VWAPPoint {
+  time: number;
+  vwap: number;
+  upper1: number;
+  lower1: number;
+  upper2: number;
+  lower2: number;
+}
+
+/**
+ * VWAP with 1σ and 2σ bands.  Resets at the start of each UTC day.
+ */
+export function vwap(candles: Candle[]): VWAPPoint[] {
+  const out: VWAPPoint[] = [];
+  if (candles.length === 0) return out;
+
+  let cumVol = 0;
+  let cumTP = 0; // cumulative(tp * vol)
+  let cumTP2 = 0; // cumulative(tp² * vol)
+  let currentDay = -1;
+
+  for (let i = 0; i < candles.length; i++) {
+    const c = candles[i];
+    const day = Math.floor(c.time / 86_400); // UTC day index (time is in seconds)
+
+    // Reset accumulators on new day
+    if (day !== currentDay) {
+      cumVol = 0;
+      cumTP = 0;
+      cumTP2 = 0;
+      currentDay = day;
+    }
+
+    const tp = (c.high + c.low + c.close) / 3;
+    cumVol += c.volume;
+    cumTP += tp * c.volume;
+    cumTP2 += tp * tp * c.volume;
+
+    if (cumVol === 0) {
+      out.push({ time: c.time, vwap: tp, upper1: tp, lower1: tp, upper2: tp, lower2: tp });
+      continue;
+    }
+
+    const vwapVal = cumTP / cumVol;
+    // Variance = E[tp²] - E[tp]²  (volume-weighted)
+    const variance = cumTP2 / cumVol - vwapVal * vwapVal;
+    const sd = Math.sqrt(Math.max(0, variance));
+
+    out.push({
+      time: c.time,
+      vwap: vwapVal,
+      upper1: vwapVal + sd,
+      lower1: vwapVal - sd,
+      upper2: vwapVal + 2 * sd,
+      lower2: vwapVal - 2 * sd,
+    });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// WaveTrend (Cipher) oscillator
+// ---------------------------------------------------------------------------
+
+export interface WaveTrendPoint {
+  time: number;
+  wt1: number;
+  wt2: number;
+}
+
+/**
+ * WaveTrend oscillator.
+ *
+ * channelLen = 9, avgLen = 12, signalLen = 3 (defaults).
+ *
+ * Steps:
+ *  1. hlc3 = (H + L + C) / 3
+ *  2. esa  = EMA(hlc3, channelLen)
+ *  3. d    = EMA(|hlc3 − esa|, channelLen)
+ *  4. ci   = (hlc3 − esa) / (0.015 * d)
+ *  5. wt1  = EMA(ci, avgLen)
+ *  6. wt2  = SMA(wt1, signalLen)
+ */
+export function waveTrend(
+  candles: Candle[],
+  channelLen = 9,
+  avgLen = 12,
+  signalLen = 3,
+): WaveTrendPoint[] {
+  const n = candles.length;
+  if (n === 0) return [];
+
+  // --- helper: EMA over a number[] (seeded with SMA of first `period` values) ---
+  function emaArr(src: number[], period: number): number[] {
+    const result: number[] = new Array(src.length).fill(NaN);
+    if (src.length < period) return result;
+    const k = 2 / (period + 1);
+    let prev = 0;
+    for (let i = 0; i < period; i++) prev += src[i];
+    prev /= period;
+    result[period - 1] = prev;
+    for (let i = period; i < src.length; i++) {
+      prev = src[i] * k + prev * (1 - k);
+      result[i] = prev;
+    }
+    return result;
+  }
+
+  // 1. hlc3
+  const hlc3: number[] = new Array(n);
+  for (let i = 0; i < n; i++) {
+    hlc3[i] = (candles[i].high + candles[i].low + candles[i].close) / 3;
+  }
+
+  // 2. esa = EMA(hlc3, channelLen)
+  const esa = emaArr(hlc3, channelLen);
+
+  // 3. d = EMA(|hlc3 - esa|, channelLen)
+  const absDiff: number[] = new Array(n).fill(0);
+  for (let i = channelLen - 1; i < n; i++) {
+    absDiff[i] = Math.abs(hlc3[i] - esa[i]);
+  }
+  const d = emaArr(absDiff, channelLen);
+
+  // 4. ci = (hlc3 - esa) / (0.015 * d)
+  const ci: number[] = new Array(n).fill(0);
+  // ci is valid from index (2 * channelLen - 2) onward (both esa and d valid)
+  const ciStart = 2 * (channelLen - 1);
+  for (let i = ciStart; i < n; i++) {
+    const dVal = d[i];
+    ci[i] = dVal === 0 ? 0 : (hlc3[i] - esa[i]) / (0.015 * dVal);
+  }
+
+  // 5. wt1 = EMA(ci, avgLen)
+  //    We need to feed emaArr only the valid portion of ci, then map back.
+  const ciSlice = ci.slice(ciStart);
+  const wt1Slice = emaArr(ciSlice, avgLen);
+  // wt1Slice is valid from index (avgLen - 1); absolute index = ciStart + avgLen - 1
+  const wt1Start = ciStart + avgLen - 1;
+
+  // 6. wt2 = SMA(wt1, signalLen) — over the valid wt1 values
+  //    Collect valid wt1 values first
+  const wt1Valid: number[] = [];
+  for (let i = avgLen - 1; i < wt1Slice.length; i++) {
+    wt1Valid.push(wt1Slice[i]);
+  }
+  // SMA inline
+  const wt2Valid: number[] = new Array(wt1Valid.length).fill(NaN);
+  if (wt1Valid.length >= signalLen) {
+    let sum = 0;
+    for (let i = 0; i < wt1Valid.length; i++) {
+      sum += wt1Valid[i];
+      if (i >= signalLen) sum -= wt1Valid[i - signalLen];
+      if (i >= signalLen - 1) wt2Valid[i] = sum / signalLen;
+    }
+  }
+
+  // Build output — both wt1 and wt2 must be valid
+  const out: WaveTrendPoint[] = [];
+  const wt2AbsStart = wt1Start + signalLen - 1;
+  for (let i = 0; i < wt1Valid.length; i++) {
+    const absIdx = wt1Start + i;
+    const w2 = wt2Valid[i];
+    if (absIdx < wt2AbsStart || isNaN(w2)) continue;
+    out.push({
+      time: candles[absIdx].time,
+      wt1: wt1Valid[i],
+      wt2: w2,
+    });
+  }
+
+  return out;
+}

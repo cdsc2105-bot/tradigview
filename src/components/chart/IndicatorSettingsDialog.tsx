@@ -25,6 +25,8 @@ const TITLES: Record<IndicatorKey, string> = {
   bb: "Bollinger Bands",
   stoch: "Stochastic",
   supertrend: "SuperTrend",
+  vwap: "VWAP",
+  wavetrend: "WaveTrend",
 };
 
 export function IndicatorSettingsDialog() {
@@ -109,7 +111,13 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
         stPeriod: clamp(draft.stPeriod, 2, 100),
         stMultiplier: clamp(draft.stMultiplier, 0.5, 10),
       });
-    else if (target === "volume") onSave({});
+    else if (target === "wavetrend")
+      onSave({
+        wtChannel: clamp(draft.wtChannel, 2, 100),
+        wtAvg: clamp(draft.wtAvg, 2, 100),
+        wtSignal: clamp(draft.wtSignal, 2, 50),
+      });
+    else if (target === "vwap" || target === "volume") onSave({});
   }
 
   return (
@@ -193,6 +201,30 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
             onChange={(n) => setDraft((d) => ({ ...d, stMultiplier: n }))}
           />
         </div>
+      )}
+      {target === "wavetrend" && (
+        <div className="grid grid-cols-3 gap-2">
+          <Field
+            label="Canal"
+            value={draft.wtChannel}
+            onChange={(n) => setDraft((d) => ({ ...d, wtChannel: n }))}
+          />
+          <Field
+            label="Promedio"
+            value={draft.wtAvg}
+            onChange={(n) => setDraft((d) => ({ ...d, wtAvg: n }))}
+          />
+          <Field
+            label="Señal"
+            value={draft.wtSignal}
+            onChange={(n) => setDraft((d) => ({ ...d, wtSignal: n }))}
+          />
+        </div>
+      )}
+      {target === "vwap" && (
+        <p className="text-xs text-tv-text-muted">
+          VWAP se calcula automáticamente y se resetea al inicio de cada día UTC.
+        </p>
       )}
       {target === "volume" && (
         <p className="text-xs text-tv-text-muted">

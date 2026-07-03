@@ -13,8 +13,9 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { fetchKlines } from "@/lib/binance/rest";
+import { fetchBitgetKlines } from "@/lib/exchanges/bitget";
 import { getBinanceWS } from "@/lib/binance/ws";
-import { ema, rsi, macd, bollingerBands, stochastic, superTrend } from "@/lib/indicators";
+import { ema, rsi, macd, bollingerBands, stochastic, superTrend, vwap, waveTrend } from "@/lib/indicators";
 import type { Candle, Timeframe } from "@/lib/binance/types";
 import {
   INDICATOR_COLORS,
@@ -49,6 +50,7 @@ function durationLabel(aTime: number, bTime: number): string {
 interface Props {
   symbol: string;
   timeframe: Timeframe;
+  exchange: "binance" | "bitget";
 }
 
 const TV_COLORS = {
@@ -91,6 +93,9 @@ interface LastValues {
   stochD?: number;
   supertrend?: number;
   supertrendDir?: 1 | -1;
+  vwapVal?: number;
+  wt1?: number;
+  wt2?: number;
 }
 
 interface PaneOffset {
@@ -98,7 +103,7 @@ interface PaneOffset {
   height: number;
 }
 
-export function PriceChart({ symbol, timeframe }: Props) {
+export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -121,6 +126,14 @@ export function PriceChart({ symbol, timeframe }: Props) {
   const stoch80Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const stBullRef = useRef<ISeriesApi<"Line"> | null>(null);
   const stBearRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const vwapRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const vwapU1Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const vwapL1Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const vwapU2Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const vwapL2Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const wt1Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const wt2Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const wt0Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const candlesRef = useRef<Candle[]>([]);
   const priceLinesMapRef = useRef<Map<string, IPriceLine>>(new Map());
 
@@ -353,6 +366,14 @@ export function PriceChart({ symbol, timeframe }: Props) {
       stoch80Ref.current = null;
       stBullRef.current = null;
       stBearRef.current = null;
+      vwapRef.current = null;
+      vwapU1Ref.current = null;
+      vwapL1Ref.current = null;
+      vwapU2Ref.current = null;
+      vwapL2Ref.current = null;
+      wt1Ref.current = null;
+      wt2Ref.current = null;
+      wt0Ref.current = null;
     };
   }, []);
 
@@ -606,6 +627,57 @@ export function PriceChart({ symbol, timeframe }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [indicators.supertrend]);
 
+  // VWAP — overlay on main pane
+  useEffect(() => {
+    if (!chartRef.current) return;
+    if (indicators.vwap && !vwapRef.current) {
+      const c = INDICATOR_COLORS.vwap;
+      vwapRef.current = chartRef.current.addSeries(LineSeries, { color: c, lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+      vwapU1Ref.current = chartRef.current.addSeries(LineSeries, { color: c, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+      vwapL1Ref.current = chartRef.current.addSeries(LineSeries, { color: c, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+      vwapU2Ref.current = chartRef.current.addSeries(LineSeries, { color: c, lineWidth: 1, lineStyle: 3, priceLineVisible: false, lastValueVisible: false });
+      vwapL2Ref.current = chartRef.current.addSeries(LineSeries, { color: c, lineWidth: 1, lineStyle: 3, priceLineVisible: false, lastValueVisible: false });
+      updateVWAP();
+    } else if (!indicators.vwap && vwapRef.current && chartRef.current) {
+      chartRef.current.removeSeries(vwapRef.current);
+      chartRef.current.removeSeries(vwapU1Ref.current!);
+      chartRef.current.removeSeries(vwapL1Ref.current!);
+      chartRef.current.removeSeries(vwapU2Ref.current!);
+      chartRef.current.removeSeries(vwapL2Ref.current!);
+      vwapRef.current = null;
+      vwapU1Ref.current = null;
+      vwapL1Ref.current = null;
+      vwapU2Ref.current = null;
+      vwapL2Ref.current = null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indicators.vwap]);
+
+  // WaveTrend pane
+  useEffect(() => {
+    if (!chartRef.current) return;
+    if (indicators.wavetrend && !wt1Ref.current) {
+      const paneIndex = 1 + (indicators.rsi ? 1 : 0) + (indicators.macd ? 1 : 0) + (indicators.stoch ? 1 : 0);
+      wt1Ref.current = chartRef.current.addSeries(LineSeries, { color: INDICATOR_COLORS.wavetrend, lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, paneIndex);
+      wt2Ref.current = chartRef.current.addSeries(LineSeries, { color: "#ff5722", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, paneIndex);
+      wt0Ref.current = chartRef.current.addSeries(LineSeries, { color: TV_COLORS.textMuted, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false }, paneIndex);
+      try {
+        chartRef.current.panes()[paneIndex]?.setStretchFactor(1);
+        chartRef.current.panes()[0]?.setStretchFactor(3);
+      } catch {}
+      updateWaveTrend();
+    } else if (!indicators.wavetrend && wt1Ref.current && chartRef.current) {
+      chartRef.current.removeSeries(wt1Ref.current);
+      if (wt2Ref.current) chartRef.current.removeSeries(wt2Ref.current);
+      if (wt0Ref.current) chartRef.current.removeSeries(wt0Ref.current);
+      wt1Ref.current = null;
+      wt2Ref.current = null;
+      wt0Ref.current = null;
+    }
+    requestAnimationFrame(() => recomputePaneOffsets());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indicators.wavetrend, indicators.rsi, indicators.macd, indicators.stoch]);
+
   // Visibility — eye toggle (hidden state) + enabled state combined
   useEffect(() => {
     const v = (key: IndicatorKey) => indicators[key] && !hidden[key];
@@ -628,6 +700,14 @@ export function PriceChart({ symbol, timeframe }: Props) {
     if (stoch80Ref.current) stoch80Ref.current.applyOptions({ visible: v("stoch") });
     if (stBullRef.current) stBullRef.current.applyOptions({ visible: v("supertrend") });
     if (stBearRef.current) stBearRef.current.applyOptions({ visible: v("supertrend") });
+    if (vwapRef.current) vwapRef.current.applyOptions({ visible: v("vwap") });
+    if (vwapU1Ref.current) vwapU1Ref.current.applyOptions({ visible: v("vwap") });
+    if (vwapL1Ref.current) vwapL1Ref.current.applyOptions({ visible: v("vwap") });
+    if (vwapU2Ref.current) vwapU2Ref.current.applyOptions({ visible: v("vwap") });
+    if (vwapL2Ref.current) vwapL2Ref.current.applyOptions({ visible: v("vwap") });
+    if (wt1Ref.current) wt1Ref.current.applyOptions({ visible: v("wavetrend") });
+    if (wt2Ref.current) wt2Ref.current.applyOptions({ visible: v("wavetrend") });
+    if (wt0Ref.current) wt0Ref.current.applyOptions({ visible: v("wavetrend") });
   }, [indicators, hidden]);
 
   // Recompute indicators when config changes (periods)
@@ -654,6 +734,10 @@ export function PriceChart({ symbol, timeframe }: Props) {
   useEffect(() => {
     updateSuperTrend();
   }, [config.stPeriod, config.stMultiplier]);
+
+  useEffect(() => {
+    updateWaveTrend();
+  }, [config.wtChannel, config.wtAvg, config.wtSignal]);
 
   // Sync price lines from store to the candle series
   useEffect(() => {
@@ -854,6 +938,35 @@ export function PriceChart({ symbol, timeframe }: Props) {
     }));
   }
 
+  function updateVWAP() {
+    const c = candlesRef.current;
+    if (c.length === 0 || !vwapRef.current) return;
+    const data = vwap(c);
+    vwapRef.current.setData(data.map((p) => ({ time: p.time as UTCTimestamp, value: p.vwap })));
+    vwapU1Ref.current?.setData(data.map((p) => ({ time: p.time as UTCTimestamp, value: p.upper1 })));
+    vwapL1Ref.current?.setData(data.map((p) => ({ time: p.time as UTCTimestamp, value: p.lower1 })));
+    vwapU2Ref.current?.setData(data.map((p) => ({ time: p.time as UTCTimestamp, value: p.upper2 })));
+    vwapL2Ref.current?.setData(data.map((p) => ({ time: p.time as UTCTimestamp, value: p.lower2 })));
+    setLastValues((prev) => ({ ...prev, vwapVal: data.at(-1)?.vwap }));
+  }
+
+  function updateWaveTrend() {
+    const c = candlesRef.current;
+    if (c.length === 0 || !wt1Ref.current) return;
+    const cfg = configRef.current;
+    const data = waveTrend(c, cfg.wtChannel, cfg.wtAvg, cfg.wtSignal);
+    wt1Ref.current.setData(data.map((p) => ({ time: p.time as UTCTimestamp, value: p.wt1 })));
+    wt2Ref.current?.setData(data.map((p) => ({ time: p.time as UTCTimestamp, value: p.wt2 })));
+    if (wt0Ref.current && data.length > 0) {
+      wt0Ref.current.setData([
+        { time: data[0].time as UTCTimestamp, value: 0 },
+        { time: data[data.length - 1].time as UTCTimestamp, value: 0 },
+      ]);
+    }
+    const last = data.at(-1);
+    setLastValues((prev) => ({ ...prev, wt1: last?.wt1, wt2: last?.wt2 }));
+  }
+
   // Load historical data + subscribe live
   useEffect(() => {
     let unsub: (() => void) | null = null;
@@ -861,7 +974,9 @@ export function PriceChart({ symbol, timeframe }: Props) {
 
     async function load() {
       try {
-        const klines = await fetchKlines(symbol, timeframe, 1000);
+        const klines = exchange === "bitget"
+          ? await fetchBitgetKlines(symbol, timeframe, 200)
+          : await fetchKlines(symbol, timeframe, 1000);
         if (cancelled) return;
         candlesRef.current = klines;
         if (candleSeriesRef.current) {
@@ -890,6 +1005,8 @@ export function PriceChart({ symbol, timeframe }: Props) {
         updateBB();
         updateStoch();
         updateSuperTrend();
+        updateVWAP();
+        updateWaveTrend();
         chartRef.current?.timeScale().fitContent();
         requestAnimationFrame(() => recomputePaneOffsets());
 
@@ -902,6 +1019,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
           });
         }
 
+        if (exchange !== "binance") return;
         const ws = getBinanceWS();
         unsub = ws.subscribeKline({
           symbol,
@@ -938,6 +1056,8 @@ export function PriceChart({ symbol, timeframe }: Props) {
             updateBB();
             updateStoch();
             updateSuperTrend();
+            updateVWAP();
+            updateWaveTrend();
             const prev = arr[arr.length - 2] ?? lastCandle;
             setLastPrice({
               value: k.close,
@@ -956,7 +1076,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
       cancelled = true;
       if (unsub) unsub();
     };
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, exchange]);
 
   const greenOrRed = (n: number) =>
     n >= 0 ? "text-tv-green" : "text-tv-red";
@@ -969,6 +1089,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
   const rsiPaneIdx = 1;
   const macdPaneIdx = indicators.rsi ? 2 : 1;
   const stochPaneIdx = 1 + (indicators.rsi ? 1 : 0) + (indicators.macd ? 1 : 0);
+  const wtPaneIdx = 1 + (indicators.rsi ? 1 : 0) + (indicators.macd ? 1 : 0) + (indicators.stoch ? 1 : 0);
 
   let measureRender: React.ReactNode = null;
   if (
@@ -1033,7 +1154,7 @@ export function PriceChart({ symbol, timeframe }: Props) {
             <span className="text-tv-text-muted">·</span>
             <span className="uppercase text-tv-text-muted">{timeframe}</span>
             <span className="text-tv-text-muted">·</span>
-            <span className="text-tv-text-muted">Binance</span>
+            <span className="text-tv-text-muted">{exchange === "bitget" ? "Bitget Perp" : "Binance"}</span>
           </div>
           {hover && (
             <div className="flex items-center gap-x-3 text-[11px]">
@@ -1149,6 +1270,17 @@ export function PriceChart({ symbol, timeframe }: Props) {
               onRemove={() => removeIndicator("supertrend")}
             />
           )}
+          {indicators.vwap && (
+            <IndicatorPill
+              name="VWAP"
+              value={lastValues.vwapVal !== undefined ? formatPrice(lastValues.vwapVal) : undefined}
+              color={INDICATOR_COLORS.vwap}
+              hidden={hidden.vwap}
+              onToggleHide={() => toggleHidden("vwap")}
+              onSettings={() => setSettingsTarget("vwap")}
+              onRemove={() => removeIndicator("vwap")}
+            />
+          )}
         </div>
       </div>
 
@@ -1210,6 +1342,28 @@ export function PriceChart({ symbol, timeframe }: Props) {
             onToggleHide={() => toggleHidden("stoch")}
             onSettings={() => setSettingsTarget("stoch")}
             onRemove={() => removeIndicator("stoch")}
+          />
+        </div>
+      )}
+
+      {/* WaveTrend pane label */}
+      {indicators.wavetrend && paneOffsets[wtPaneIdx] && (
+        <div
+          style={{ top: paneOffsets[wtPaneIdx].top + 6, left: 12 }}
+          className="pointer-events-none absolute z-10"
+        >
+          <IndicatorPill
+            name={`WT ${config.wtChannel}, ${config.wtAvg}, ${config.wtSignal}`}
+            value={
+              lastValues.wt1 !== undefined
+                ? `${lastValues.wt1.toFixed(1)} / ${(lastValues.wt2 ?? 0).toFixed(1)}`
+                : undefined
+            }
+            color={INDICATOR_COLORS.wavetrend}
+            hidden={hidden.wavetrend}
+            onToggleHide={() => toggleHidden("wavetrend")}
+            onSettings={() => setSettingsTarget("wavetrend")}
+            onRemove={() => removeIndicator("wavetrend")}
           />
         </div>
       )}

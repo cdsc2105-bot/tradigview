@@ -2,6 +2,7 @@
 
 import { Code2, Zap } from "lucide-react";
 import { SymbolSelector } from "@/components/chart/SymbolSelector";
+import { ExchangeSelector } from "@/components/chart/ExchangeSelector";
 import { TimeframeSelector } from "@/components/chart/TimeframeSelector";
 import { IndicatorMenu } from "@/components/chart/IndicatorMenu";
 import { Separator } from "@/components/ui/separator";
@@ -18,6 +19,8 @@ export function Header() {
             TradingView <span className="text-tv-text-muted">Gratis</span>
           </span>
         </div>
+        <Separator orientation="vertical" className="h-6 bg-tv-border" />
+        <ExchangeSelector />
         <Separator orientation="vertical" className="h-6 bg-tv-border" />
         <SymbolSelector />
         <Separator orientation="vertical" className="h-6 bg-tv-border" />

@@ -4,6 +4,8 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Timeframe } from "@/lib/binance/types";
 
+export type Exchange = "binance" | "bitget";
+
 export type IndicatorKey =
   | "ema20"
   | "ema50"
@@ -13,7 +15,9 @@ export type IndicatorKey =
   | "volume"
   | "bb"
   | "stoch"
-  | "supertrend";
+  | "supertrend"
+  | "vwap"
+  | "wavetrend";
 
 export type DrawingTool = "cursor" | "hline" | "measure" | "eraser";
 
@@ -38,6 +42,9 @@ export interface IndicatorConfig {
   stochSmooth: number;
   stPeriod: number;
   stMultiplier: number;
+  wtChannel: number;
+  wtAvg: number;
+  wtSignal: number;
 }
 
 export const DEFAULT_CONFIG: IndicatorConfig = {
@@ -55,6 +62,9 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   stochSmooth: 3,
   stPeriod: 10,
   stMultiplier: 3,
+  wtChannel: 9,
+  wtAvg: 12,
+  wtSignal: 3,
 };
 
 export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
@@ -67,6 +77,8 @@ export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
   bb: "#e91e63",
   stoch: "#00bcd4",
   supertrend: "#4caf50",
+  vwap: "#e040fb",
+  wavetrend: "#26c6da",
 };
 
 export const DEFAULT_WATCHLIST = [
@@ -84,6 +96,7 @@ export const DEFAULT_WATCHLIST = [
 
 interface ChartState {
   symbol: string;
+  exchange: Exchange;
   timeframe: Timeframe;
   /** Indicator is added to the chart (appears in pill + renders unless hidden) */
   indicators: Record<IndicatorKey, boolean>;
@@ -102,6 +115,7 @@ interface ChartState {
 
   // Actions
   setSymbol: (s: string) => void;
+  setExchange: (e: Exchange) => void;
   setTimeframe: (t: Timeframe) => void;
   toggleIndicator: (key: IndicatorKey) => void;
   removeIndicator: (key: IndicatorKey) => void;
@@ -120,6 +134,7 @@ export const useChartStore = create<ChartState>()(
   persist(
     (set) => ({
       symbol: "BTCUSDT",
+      exchange: "binance" as Exchange,
       timeframe: "15m" as Timeframe,
       indicators: {
         ema20: true,
@@ -131,6 +146,8 @@ export const useChartStore = create<ChartState>()(
         bb: false,
         stoch: false,
         supertrend: false,
+        vwap: false,
+        wavetrend: false,
       },
       hidden: {
         ema20: false,
@@ -142,6 +159,8 @@ export const useChartStore = create<ChartState>()(
         bb: false,
         stoch: false,
         supertrend: false,
+        vwap: false,
+        wavetrend: false,
       },
       config: { ...DEFAULT_CONFIG },
       watchlist: DEFAULT_WATCHLIST,
@@ -151,6 +170,7 @@ export const useChartStore = create<ChartState>()(
       settingsTarget: null,
 
       setSymbol: (symbol) => set({ symbol }),
+      setExchange: (exchange) => set({ exchange }),
       setTimeframe: (timeframe) => set({ timeframe }),
       toggleIndicator: (key) =>
         set((s) => ({
@@ -207,12 +227,24 @@ export const useChartStore = create<ChartState>()(
       name: "tv-gratis-chart-state",
       partialize: (s) => ({
         symbol: s.symbol,
+        exchange: s.exchange,
         timeframe: s.timeframe,
         indicators: s.indicators,
         hidden: s.hidden,
         config: s.config,
         watchlist: s.watchlist,
       }),
+      merge: (persisted, current) => {
+        const p = persisted as Partial<ChartState>;
+        return {
+          ...current,
+          ...p,
+          exchange: p.exchange ?? "binance",
+          indicators: { ...current.indicators, ...p.indicators },
+          hidden: { ...current.hidden, ...p.hidden },
+          config: { ...current.config, ...p.config },
+        };
+      },
     },
   ),
 );

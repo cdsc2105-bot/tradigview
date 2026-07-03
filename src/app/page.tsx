@@ -10,6 +10,7 @@ import { useChartStore } from "@/lib/store/chart-store";
 
 export default function HomePage() {
   const symbol = useChartStore((s) => s.symbol);
+  const exchange = useChartStore((s) => s.exchange);
   const timeframe = useChartStore((s) => s.timeframe);
 
   return (
@@ -19,7 +20,7 @@ export default function HomePage() {
         <LeftSidebar />
         <main className="relative flex min-h-0 flex-1 flex-col">
           <div className="min-h-0 flex-1">
-            <PriceChart symbol={symbol} timeframe={timeframe} />
+            <PriceChart symbol={symbol} timeframe={timeframe} exchange={exchange} />
           </div>
         </main>
         <RightSidebar />

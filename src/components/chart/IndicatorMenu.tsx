@@ -44,6 +44,16 @@ const ENTRIES: Entry[] = [
     group: "Tendencia",
     label: (c) => `SuperTrend (${c.stPeriod}, ${c.stMultiplier})`,
   },
+  {
+    key: "vwap",
+    group: "Volumen",
+    label: () => "VWAP",
+  },
+  {
+    key: "wavetrend",
+    group: "Osciladores",
+    label: (c) => `WaveTrend (${c.wtChannel}, ${c.wtAvg}, ${c.wtSignal})`,
+  },
 ];
 
 export function IndicatorMenu() {
