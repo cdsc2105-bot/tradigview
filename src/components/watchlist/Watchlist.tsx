@@ -3,27 +3,40 @@
 import { useEffect, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { fetchTickers24h } from "@/lib/binance/rest";
+import { fetchBitgetTickers } from "@/lib/exchanges/bitget";
 import { getBinanceWS } from "@/lib/binance/ws";
-import { useChartStore } from "@/lib/store/chart-store";
+import { useChartStore, type Exchange } from "@/lib/store/chart-store";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatPrice, formatPct } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 interface Row {
-  symbol: string;
   price: number;
   pct: number;
 }
 
+/** Key rows by "exchange:symbol" so Binance and Bitget don't collide. */
+type RowMap = Record<string, Row>;
+
+const rk = (exchange: Exchange, symbol: string) => `${exchange}:${symbol}`;
+
+const SECTIONS: { key: Exchange; label: string }[] = [
+  { key: "binance", label: "Binance" },
+  { key: "bitget", label: "Bitget Perp" },
+];
+
 export function Watchlist() {
   const watchlist = useChartStore((s) => s.watchlist);
   const symbol = useChartStore((s) => s.symbol);
+  const exchange = useChartStore((s) => s.exchange);
   const setSymbol = useChartStore((s) => s.setSymbol);
+  const setExchange = useChartStore((s) => s.setExchange);
   const removeFromWatchlist = useChartStore((s) => s.removeFromWatchlist);
   const openSymbolDialog = useChartStore((s) => s.setSymbolDialogOpen);
-  const [rows, setRows] = useState<Record<string, Row>>({});
+  const [rows, setRows] = useState<RowMap>({});
   const [flash, setFlash] = useState<Record<string, "up" | "down" | null>>({});
 
+  // Binance: REST snapshot + live WebSocket mini-tickers
   useEffect(() => {
     if (watchlist.length === 0) return;
     let cancelled = false;
@@ -31,47 +44,34 @@ export function Watchlist() {
     fetchTickers24h(watchlist)
       .then((tickers) => {
         if (cancelled) return;
-        const map: Record<string, Row> = {};
-        tickers.forEach((t) => {
-          map[t.symbol] = {
-            symbol: t.symbol,
-            price: t.lastPrice,
-            pct: t.priceChangePercent,
-          };
+        setRows((prev) => {
+          const next = { ...prev };
+          tickers.forEach((t) => {
+            next[rk("binance", t.symbol)] = {
+              price: t.lastPrice,
+              pct: t.priceChangePercent,
+            };
+          });
+          return next;
         });
-        setRows(map);
       })
       .catch(console.error);
 
     const ws = getBinanceWS();
     const unsub = ws.subscribeMiniTickers(watchlist, (tick) => {
+      const key = rk("binance", tick.symbol);
       setRows((prev) => {
-        const prevRow = prev[tick.symbol];
+        const prevRow = prev[key];
         if (prevRow) {
           if (tick.close > prevRow.price) {
-            setFlash((f) => ({ ...f, [tick.symbol]: "up" }));
-            setTimeout(
-              () =>
-                setFlash((f) => ({ ...f, [tick.symbol]: null })),
-              300,
-            );
+            setFlash((f) => ({ ...f, [key]: "up" }));
+            setTimeout(() => setFlash((f) => ({ ...f, [key]: null })), 300);
           } else if (tick.close < prevRow.price) {
-            setFlash((f) => ({ ...f, [tick.symbol]: "down" }));
-            setTimeout(
-              () =>
-                setFlash((f) => ({ ...f, [tick.symbol]: null })),
-              300,
-            );
+            setFlash((f) => ({ ...f, [key]: "down" }));
+            setTimeout(() => setFlash((f) => ({ ...f, [key]: null })), 300);
           }
         }
-        return {
-          ...prev,
-          [tick.symbol]: {
-            symbol: tick.symbol,
-            price: tick.close,
-            pct: tick.pct,
-          },
-        };
+        return { ...prev, [key]: { price: tick.close, pct: tick.pct } };
       });
     });
 
@@ -80,6 +80,42 @@ export function Watchlist() {
       unsub();
     };
   }, [watchlist]);
+
+  // Bitget: poll all tickers every 5s (no public mini-ticker WS multiplexing)
+  useEffect(() => {
+    if (watchlist.length === 0) return;
+    let cancelled = false;
+
+    const load = () => {
+      fetchBitgetTickers(watchlist)
+        .then((tickers) => {
+          if (cancelled) return;
+          setRows((prev) => {
+            const next = { ...prev };
+            tickers.forEach((t) => {
+              next[rk("bitget", t.symbol)] = {
+                price: t.lastPrice,
+                pct: t.priceChangePercent,
+              };
+            });
+            return next;
+          });
+        })
+        .catch(console.error);
+    };
+
+    load();
+    const id = setInterval(load, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [watchlist]);
+
+  const select = (ex: Exchange, s: string) => {
+    setExchange(ex);
+    setSymbol(s);
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -103,68 +139,85 @@ export function Watchlist() {
       </div>
       <ScrollArea className="flex-1">
         <div className="flex flex-col">
-          {watchlist.map((s) => {
-            const row = rows[s];
-            const isActive = s === symbol;
-            const f = flash[s];
-            return (
-              <div
-                key={s}
-                onClick={() => setSymbol(s)}
-                className={cn(
-                  "group grid cursor-pointer grid-cols-[1fr_auto_auto] items-center gap-2 px-3 py-1.5 text-xs transition-colors",
-                  "hover:bg-tv-panel-hover",
-                  isActive && "bg-tv-panel-hover",
-                )}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-tv-text">
-                    {s.replace("USDT", "")}
-                  </span>
-                  <span className="text-[10px] text-tv-text-dim">USDT</span>
-                </div>
-                <span
-                  className={cn(
-                    "text-right tabular-nums transition-colors",
-                    f === "up" && "text-tv-green",
-                    f === "down" && "text-tv-red",
-                    !f && "text-tv-text",
-                  )}
-                >
-                  {row ? formatPrice(row.price) : "—"}
-                </span>
-                <div className="flex items-center justify-end gap-1">
-                  <span
-                    className={cn(
-                      "tabular-nums",
-                      row
-                        ? row.pct >= 0
-                          ? "text-tv-green"
-                          : "text-tv-red"
-                        : "text-tv-text-muted",
-                    )}
-                  >
-                    {row ? formatPct(row.pct) : "—"}
-                  </span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeFromWatchlist(s);
-                    }}
-                    className="invisible rounded p-0.5 text-tv-text-muted hover:bg-tv-bg hover:text-tv-red group-hover:visible"
-                    aria-label={`Quitar ${s} del watchlist`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              </div>
-            );
-          })}
           {watchlist.length === 0 && (
             <div className="p-4 text-center text-xs text-tv-text-muted">
               Tu watchlist está vacío
             </div>
           )}
+          {SECTIONS.map((section) => (
+            <div key={section.key}>
+              <div className="flex items-center gap-2 bg-tv-bg/40 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-tv-text-dim">
+                <span
+                  className={cn(
+                    "inline-flex h-1.5 w-1.5 rounded-full",
+                    section.key === "binance" ? "bg-tv-yellow" : "bg-tv-blue",
+                  )}
+                />
+                {section.label}
+              </div>
+              {watchlist.map((s) => {
+                const key = rk(section.key, s);
+                const row = rows[key];
+                const isActive = s === symbol && section.key === exchange;
+                const f = flash[key];
+                return (
+                  <div
+                    key={key}
+                    onClick={() => select(section.key, s)}
+                    className={cn(
+                      "group grid cursor-pointer grid-cols-[1fr_auto_auto] items-center gap-2 px-3 py-1.5 text-xs transition-colors",
+                      "hover:bg-tv-panel-hover",
+                      isActive && "bg-tv-panel-hover",
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      {isActive && (
+                        <span className="h-3 w-0.5 rounded-full bg-tv-blue" />
+                      )}
+                      <span className="font-medium text-tv-text">
+                        {s.replace("USDT", "")}
+                      </span>
+                      <span className="text-[10px] text-tv-text-dim">USDT</span>
+                    </div>
+                    <span
+                      className={cn(
+                        "text-right tabular-nums transition-colors",
+                        f === "up" && "text-tv-green",
+                        f === "down" && "text-tv-red",
+                        !f && "text-tv-text",
+                      )}
+                    >
+                      {row ? formatPrice(row.price) : "—"}
+                    </span>
+                    <div className="flex items-center justify-end gap-1">
+                      <span
+                        className={cn(
+                          "tabular-nums",
+                          row
+                            ? row.pct >= 0
+                              ? "text-tv-green"
+                              : "text-tv-red"
+                            : "text-tv-text-muted",
+                        )}
+                      >
+                        {row ? formatPct(row.pct) : "—"}
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeFromWatchlist(s);
+                        }}
+                        className="invisible rounded p-0.5 text-tv-text-muted hover:bg-tv-bg hover:text-tv-red group-hover:visible"
+                        aria-label={`Quitar ${s} del watchlist`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
         </div>
       </ScrollArea>
     </div>
