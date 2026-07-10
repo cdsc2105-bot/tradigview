@@ -29,13 +29,13 @@ const GRANULARITY_MAP: Record<Timeframe, string> = {
  *
  * @param symbol  Trading pair, e.g. "BTCUSDT"
  * @param interval  Timeframe string, e.g. "1m", "5m", "1h", "4h", "1d"
- * @param limit  Number of candles to fetch (default 200, max 200)
+ * @param limit  Number of candles to fetch (default 1000, max 1000)
  * @returns Array of Candle objects with time in unix seconds
  */
 export async function fetchBitgetKlines(
   symbol: string,
   interval: string,
-  limit: number = 200
+  limit: number = 1000
 ): Promise<Candle[]> {
   const granularity = GRANULARITY_MAP[interval as Timeframe] ?? interval;
 
@@ -43,7 +43,7 @@ export async function fetchBitgetKlines(
     symbol,
     productType: "USDT-FUTURES",
     granularity,
-    limit: String(Math.min(limit, 200)),
+    limit: String(Math.min(limit, 1000)),
   });
 
   const res = await fetch(`${BITGET_BASE}/candles?${params}`);

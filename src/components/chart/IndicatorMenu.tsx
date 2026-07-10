@@ -19,6 +19,12 @@ interface Entry {
 }
 
 const ENTRIES: Entry[] = [
+  {
+    key: "ribbon",
+    group: "Medias móviles",
+    label: (c) =>
+      `Cinta EMAs (${c.ribbon1}/${c.ribbon2}/${c.ribbon3}/${c.ribbon4}/${c.ribbon5})`,
+  },
   { key: "ema20", group: "Medias móviles", label: (c) => `EMA ${c.ema20}` },
   { key: "ema50", group: "Medias móviles", label: (c) => `EMA ${c.ema50}` },
   { key: "ema200", group: "Medias móviles", label: (c) => `EMA ${c.ema200}` },

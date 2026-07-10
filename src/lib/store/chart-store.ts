@@ -17,7 +17,8 @@ export type IndicatorKey =
   | "stoch"
   | "supertrend"
   | "vwap"
-  | "wavetrend";
+  | "wavetrend"
+  | "ribbon";
 
 export type DrawingTool = "cursor" | "hline" | "measure" | "eraser";
 
@@ -45,6 +46,12 @@ export interface IndicatorConfig {
   wtChannel: number;
   wtAvg: number;
   wtSignal: number;
+  /** EMA ribbon periods, fast → slow */
+  ribbon1: number;
+  ribbon2: number;
+  ribbon3: number;
+  ribbon4: number;
+  ribbon5: number;
 }
 
 export const DEFAULT_CONFIG: IndicatorConfig = {
@@ -65,7 +72,24 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   wtChannel: 9,
   wtAvg: 12,
   wtSignal: 3,
+  ribbon1: 9,
+  ribbon2: 21,
+  ribbon3: 50,
+  ribbon4: 100,
+  ribbon5: 200,
 };
+
+/** Colors for each EMA ribbon line, fast → slow. */
+export const RIBBON_COLORS = [
+  "#22d3ee", // 9  — celeste
+  "#2962ff", // 21 — azul
+  "#26a69a", // 50 — verde
+  "#ffb74d", // 100 — amarillo
+  "#ef5350", // 200 — rojo
+] as const;
+
+/** Line width for each ribbon EMA — slower EMAs are drawn thicker. */
+export const RIBBON_WIDTHS = [1, 1, 2, 2, 2] as const;
 
 export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
   ema20: "#ffb74d",
@@ -79,6 +103,7 @@ export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
   supertrend: "#4caf50",
   vwap: "#e040fb",
   wavetrend: "#26c6da",
+  ribbon: "#22d3ee",
 };
 
 export const DEFAULT_WATCHLIST = [
@@ -148,6 +173,7 @@ export const useChartStore = create<ChartState>()(
         supertrend: false,
         vwap: false,
         wavetrend: false,
+        ribbon: false,
       },
       hidden: {
         ema20: false,
@@ -161,6 +187,7 @@ export const useChartStore = create<ChartState>()(
         supertrend: false,
         vwap: false,
         wavetrend: false,
+        ribbon: false,
       },
       config: { ...DEFAULT_CONFIG },
       watchlist: DEFAULT_WATCHLIST,

@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import {
   useChartStore,
   DEFAULT_CONFIG,
+  RIBBON_COLORS,
   type IndicatorKey,
 } from "@/lib/store/chart-store";
 
@@ -27,6 +28,7 @@ const TITLES: Record<IndicatorKey, string> = {
   supertrend: "SuperTrend",
   vwap: "VWAP",
   wavetrend: "WaveTrend",
+  ribbon: "Cinta de EMAs",
 };
 
 export function IndicatorSettingsDialog() {
@@ -116,6 +118,14 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
         wtChannel: clamp(draft.wtChannel, 2, 100),
         wtAvg: clamp(draft.wtAvg, 2, 100),
         wtSignal: clamp(draft.wtSignal, 2, 50),
+      });
+    else if (target === "ribbon")
+      onSave({
+        ribbon1: clamp(draft.ribbon1, 2, 500),
+        ribbon2: clamp(draft.ribbon2, 2, 500),
+        ribbon3: clamp(draft.ribbon3, 2, 500),
+        ribbon4: clamp(draft.ribbon4, 2, 500),
+        ribbon5: clamp(draft.ribbon5, 2, 500),
       });
     else if (target === "vwap" || target === "volume") onSave({});
   }
@@ -221,6 +231,28 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
           />
         </div>
       )}
+      {target === "ribbon" && (
+        <>
+          <div className="grid grid-cols-5 gap-2">
+            {(["ribbon1", "ribbon2", "ribbon3", "ribbon4", "ribbon5"] as const).map(
+              (k, i) => (
+                <Field
+                  key={k}
+                  label={`EMA ${i + 1}`}
+                  swatch={RIBBON_COLORS[i]}
+                  value={draft[k]}
+                  onChange={(n) => setDraft((d) => ({ ...d, [k]: n }))}
+                />
+              ),
+            )}
+          </div>
+          <p className="text-xs text-tv-text-muted">
+            Precio sobre la cinta con las EMAs abiertas hacia arriba = sesgo
+            alcista. Por debajo y apuntando abajo = bajista. EMAs enredadas =
+            rango, mejor no forzar la entrada.
+          </p>
+        </>
+      )}
       {target === "vwap" && (
         <p className="text-xs text-tv-text-muted">
           VWAP se calcula automáticamente y se resetea al inicio de cada día UTC.
@@ -254,14 +286,22 @@ function Field({
   label,
   value,
   onChange,
+  swatch,
 }: {
   label: string;
   value: number;
   onChange: (n: number) => void;
+  swatch?: string;
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
+      <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
+        {swatch && (
+          <span
+            className="inline-block h-2 w-2 shrink-0 rounded-full"
+            style={{ backgroundColor: swatch }}
+          />
+        )}
         {label}
       </span>
       <Input

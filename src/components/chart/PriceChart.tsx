@@ -19,6 +19,8 @@ import { ema, rsi, macd, bollingerBands, stochastic, superTrend, vwap, waveTrend
 import type { Candle, Timeframe } from "@/lib/binance/types";
 import {
   INDICATOR_COLORS,
+  RIBBON_COLORS,
+  RIBBON_WIDTHS,
   useChartStore,
   type IndicatorKey,
 } from "@/lib/store/chart-store";
@@ -96,6 +98,8 @@ interface LastValues {
   vwapVal?: number;
   wt1?: number;
   wt2?: number;
+  /** Last value of each EMA ribbon line, fast → slow */
+  ribbon?: (number | undefined)[];
 }
 
 interface PaneOffset {
@@ -134,6 +138,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const wt1Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const wt2Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const wt0Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  /** The five EMA ribbon lines, fast → slow */
+  const ribbonRefs = useRef<(ISeriesApi<"Line"> | null)[]>([]);
   const candlesRef = useRef<Candle[]>([]);
   const priceLinesMapRef = useRef<Map<string, IPriceLine>>(new Map());
 
@@ -246,6 +252,16 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       lastValueVisible: false,
     });
 
+    ribbonRefs.current = RIBBON_COLORS.map((color, i) =>
+      chart.addSeries(LineSeries, {
+        color,
+        lineWidth: RIBBON_WIDTHS[i],
+        priceLineVisible: false,
+        lastValueVisible: false,
+        visible: false,
+      }),
+    );
+
     chartRef.current = chart;
 
     // Click handler — add horizontal price line when hline tool is active
@@ -351,6 +367,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       ema20Ref.current = null;
       ema50Ref.current = null;
       ema200Ref.current = null;
+      ribbonRefs.current = [];
       rsiRef.current = null;
       rsi30Ref.current = null;
       rsi70Ref.current = null;
@@ -684,6 +701,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     ema20Ref.current?.applyOptions({ visible: v("ema20") });
     ema50Ref.current?.applyOptions({ visible: v("ema50") });
     ema200Ref.current?.applyOptions({ visible: v("ema200") });
+    ribbonRefs.current.forEach((s) => s?.applyOptions({ visible: v("ribbon") }));
     if (rsiRef.current) rsiRef.current.applyOptions({ visible: v("rsi") });
     if (rsi30Ref.current) rsi30Ref.current.applyOptions({ visible: v("rsi") });
     if (rsi70Ref.current) rsi70Ref.current.applyOptions({ visible: v("rsi") });
@@ -714,6 +732,16 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   useEffect(() => {
     updateEMAs();
   }, [config.ema20, config.ema50, config.ema200]);
+
+  useEffect(() => {
+    updateRibbon();
+  }, [
+    config.ribbon1,
+    config.ribbon2,
+    config.ribbon3,
+    config.ribbon4,
+    config.ribbon5,
+  ]);
 
   useEffect(() => {
     updateRSI();
@@ -816,6 +844,31 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       ema200: last200,
       volume: lastVol,
     }));
+  }
+
+  function updateRibbon() {
+    const c = candlesRef.current;
+    if (c.length === 0 || ribbonRefs.current.length === 0) return;
+    const cfg = configRef.current;
+    const periods = [
+      cfg.ribbon1,
+      cfg.ribbon2,
+      cfg.ribbon3,
+      cfg.ribbon4,
+      cfg.ribbon5,
+    ];
+
+    const lasts = periods.map((period, i) => {
+      const series = ribbonRefs.current[i];
+      if (!series) return undefined;
+      const data = ema(c, period);
+      series.setData(
+        data.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })),
+      );
+      return data.at(-1)?.value;
+    });
+
+    setLastValues((prev) => ({ ...prev, ribbon: lasts }));
   }
 
   function updateRSI() {
@@ -975,7 +1028,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     async function load() {
       try {
         const klines = exchange === "bitget"
-          ? await fetchBitgetKlines(symbol, timeframe, 200)
+          ? await fetchBitgetKlines(symbol, timeframe, 1000)
           : await fetchKlines(symbol, timeframe, 1000);
         if (cancelled) return;
         candlesRef.current = klines;
@@ -1000,6 +1053,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           );
         }
         updateEMAs();
+        updateRibbon();
         updateRSI();
         updateMACD();
         updateBB();
@@ -1051,6 +1105,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
               });
             }
             updateEMAs();
+            updateRibbon();
             updateRSI();
             updateMACD();
             updateBB();
@@ -1136,6 +1191,17 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     }
   }
   void renderTick;
+
+  // Ribbon bias: EMAs stacked fast→slow descending = uptrend, ascending = downtrend,
+  // anything else means the EMAs are tangled (no clear trend).
+  const ribbonBias = (() => {
+    const r = lastValues.ribbon;
+    if (!r || r.length === 0 || r.some((x) => x === undefined)) return undefined;
+    const v = r as number[];
+    if (v.every((x, i) => i === 0 || v[i - 1] > x)) return "Alcista";
+    if (v.every((x, i) => i === 0 || v[i - 1] < x)) return "Bajista";
+    return "Rango";
+  })();
 
   return (
     <div className="relative h-full w-full">
@@ -1231,6 +1297,17 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
               onToggleHide={() => toggleHidden("ema200")}
               onSettings={() => setSettingsTarget("ema200")}
               onRemove={() => removeIndicator("ema200")}
+            />
+          )}
+          {indicators.ribbon && (
+            <IndicatorPill
+              name={`Cinta EMAs ${config.ribbon1}/${config.ribbon2}/${config.ribbon3}/${config.ribbon4}/${config.ribbon5}`}
+              value={ribbonBias}
+              color={INDICATOR_COLORS.ribbon}
+              hidden={hidden.ribbon}
+              onToggleHide={() => toggleHidden("ribbon")}
+              onSettings={() => setSettingsTarget("ribbon")}
+              onRemove={() => removeIndicator("ribbon")}
             />
           )}
           {indicators.volume && (
