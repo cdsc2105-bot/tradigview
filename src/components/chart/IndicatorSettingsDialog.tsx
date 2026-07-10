@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -9,10 +10,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import {
   useChartStore,
   DEFAULT_CONFIG,
-  RIBBON_COLORS,
+  MAX_RIBBON_LINES,
   type IndicatorKey,
 } from "@/lib/store/chart-store";
 
@@ -46,7 +48,12 @@ export function IndicatorSettingsDialog() {
         if (!v) setTarget(null);
       }}
     >
-      <DialogContent className="max-w-sm bg-tv-panel">
+      <DialogContent
+        className={cn(
+          "bg-tv-panel",
+          target === "ribbon" ? "max-w-md" : "max-w-sm",
+        )}
+      >
         <DialogHeader>
           <DialogTitle className="text-sm font-semibold">
             {target ? TITLES[target] : ""} — Configuración
@@ -119,16 +126,12 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
         wtAvg: clamp(draft.wtAvg, 2, 100),
         wtSignal: clamp(draft.wtSignal, 2, 50),
       });
-    else if (target === "ribbon")
-      onSave({
-        ribbon1: clamp(draft.ribbon1, 2, 500),
-        ribbon2: clamp(draft.ribbon2, 2, 500),
-        ribbon3: clamp(draft.ribbon3, 2, 500),
-        ribbon4: clamp(draft.ribbon4, 2, 500),
-        ribbon5: clamp(draft.ribbon5, 2, 500),
-      });
     else if (target === "vwap" || target === "volume") onSave({});
   }
+
+  // The ribbon has a variable number of lines and edits apply live, so it
+  // manages its own state instead of the shared draft/Apply flow.
+  if (target === "ribbon") return <RibbonEditor />;
 
   return (
     <div className="flex flex-col gap-3">
@@ -231,28 +234,6 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
           />
         </div>
       )}
-      {target === "ribbon" && (
-        <>
-          <div className="grid grid-cols-5 gap-2">
-            {(["ribbon1", "ribbon2", "ribbon3", "ribbon4", "ribbon5"] as const).map(
-              (k, i) => (
-                <Field
-                  key={k}
-                  label={`EMA ${i + 1}`}
-                  swatch={RIBBON_COLORS[i]}
-                  value={draft[k]}
-                  onChange={(n) => setDraft((d) => ({ ...d, [k]: n }))}
-                />
-              ),
-            )}
-          </div>
-          <p className="text-xs text-tv-text-muted">
-            Precio sobre la cinta con las EMAs abiertas hacia arriba = sesgo
-            alcista. Por debajo y apuntando abajo = bajista. EMAs enredadas =
-            rango, mejor no forzar la entrada.
-          </p>
-        </>
-      )}
       {target === "vwap" && (
         <p className="text-xs text-tv-text-muted">
           VWAP se calcula automáticamente y se resetea al inicio de cada día UTC.
@@ -276,6 +257,166 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
         </Button>
         <Button size="sm" onClick={save} className="bg-tv-blue hover:bg-tv-blue/90">
           Aplicar
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function RibbonEditor() {
+  const config = useChartStore((s) => s.config);
+  const setConfig = useChartStore((s) => s.setConfig);
+  const setRibbonLine = useChartStore((s) => s.setRibbonLine);
+  const addRibbonLine = useChartStore((s) => s.addRibbonLine);
+  const removeRibbonLine = useChartStore((s) => s.removeRibbonLine);
+  const resetRibbon = useChartStore((s) => s.resetRibbon);
+  const setTarget = useChartStore((s) => s.setSettingsTarget);
+
+  const lines = config.ribbonLines;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1.5">
+        <div className="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
+          <span className="w-4" />
+          <span>Período</span>
+          <span>Color</span>
+          <span>Grosor</span>
+          <span className="w-6" />
+        </div>
+
+        {lines.map((line, i) => (
+          <div
+            key={i}
+            className="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2"
+          >
+            <button
+              onClick={() => setRibbonLine(i, { enabled: !line.enabled })}
+              title={line.enabled ? "Ocultar esta EMA" : "Mostrar esta EMA"}
+              aria-label={line.enabled ? "Ocultar EMA" : "Mostrar EMA"}
+              className="text-tv-text-muted hover:text-tv-text"
+            >
+              {line.enabled ? (
+                <Eye className="h-3.5 w-3.5" />
+              ) : (
+                <EyeOff className="h-3.5 w-3.5" />
+              )}
+            </button>
+
+            <Input
+              type="number"
+              min={2}
+              max={500}
+              value={line.period}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10);
+                if (!isNaN(n)) setRibbonLine(i, { period: clamp(n, 2, 500) });
+              }}
+              className={cn(
+                "h-8 bg-tv-bg tabular-nums",
+                !line.enabled && "opacity-50",
+              )}
+            />
+
+            <input
+              type="color"
+              value={line.color}
+              onChange={(e) => setRibbonLine(i, { color: e.target.value })}
+              aria-label={`Color de la EMA ${line.period}`}
+              className="h-8 w-8 cursor-pointer rounded border border-tv-border bg-tv-bg p-0.5"
+            />
+
+            <select
+              value={line.width}
+              onChange={(e) =>
+                setRibbonLine(i, { width: parseInt(e.target.value, 10) })
+              }
+              aria-label={`Grosor de la EMA ${line.period}`}
+              className="h-8 rounded border border-tv-border bg-tv-bg px-1.5 text-xs text-tv-text"
+            >
+              {[1, 2, 3, 4].map((w) => (
+                <option key={w} value={w}>
+                  {w}px
+                </option>
+              ))}
+            </select>
+
+            <button
+              onClick={() => removeRibbonLine(i)}
+              disabled={lines.length <= 1}
+              title="Quitar esta EMA"
+              aria-label="Quitar EMA"
+              className="rounded p-1 text-tv-text-muted hover:bg-tv-bg hover:text-tv-red disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={addRibbonLine}
+        disabled={lines.length >= MAX_RIBBON_LINES}
+        className="justify-start gap-1.5 text-tv-text-muted hover:text-tv-text disabled:opacity-40"
+      >
+        <Plus className="h-3.5 w-3.5" />
+        Agregar EMA ({lines.length}/{MAX_RIBBON_LINES})
+      </Button>
+
+      <div className="flex flex-col gap-2 border-t border-tv-border pt-3">
+        <label className="flex items-center gap-2 text-xs text-tv-text">
+          <input
+            type="checkbox"
+            checked={config.ribbonFill}
+            onChange={(e) => setConfig({ ribbonFill: e.target.checked })}
+            className="h-3.5 w-3.5 accent-tv-blue"
+          />
+          Rellenar el área entre la EMA más rápida y la más lenta
+        </label>
+
+        {config.ribbonFill && (
+          <label className="flex items-center gap-2 text-xs text-tv-text-muted">
+            <span className="w-20 shrink-0">Opacidad</span>
+            <input
+              type="range"
+              min={0}
+              max={40}
+              value={config.ribbonFillOpacity}
+              onChange={(e) =>
+                setConfig({ ribbonFillOpacity: parseInt(e.target.value, 10) })
+              }
+              className="flex-1 accent-tv-blue"
+            />
+            <span className="w-8 text-right tabular-nums">
+              {config.ribbonFillOpacity}%
+            </span>
+          </label>
+        )}
+      </div>
+
+      <p className="text-xs text-tv-text-muted">
+        Precio sobre la cinta con las EMAs abiertas hacia arriba = sesgo alcista.
+        Por debajo y apuntando abajo = bajista. EMAs enredadas = rango, mejor no
+        forzar la entrada.
+      </p>
+
+      <div className="mt-1 flex items-center justify-between">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={resetRibbon}
+          className="text-tv-text-muted hover:text-tv-text"
+        >
+          Reset cinta
+        </Button>
+        <Button
+          size="sm"
+          onClick={() => setTarget(null)}
+          className="bg-tv-blue hover:bg-tv-blue/90"
+        >
+          Listo
         </Button>
       </div>
     </div>

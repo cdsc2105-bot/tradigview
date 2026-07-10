@@ -10,6 +10,7 @@ import {
   type IChartApi,
   type ISeriesApi,
   type IPriceLine,
+  type LineWidth,
   type UTCTimestamp,
 } from "lightweight-charts";
 import { fetchKlines } from "@/lib/binance/rest";
@@ -19,11 +20,15 @@ import { ema, rsi, macd, bollingerBands, stochastic, superTrend, vwap, waveTrend
 import type { Candle, Timeframe } from "@/lib/binance/types";
 import {
   INDICATOR_COLORS,
-  RIBBON_COLORS,
-  RIBBON_WIDTHS,
   useChartStore,
   type IndicatorKey,
+  type RibbonLine,
 } from "@/lib/store/chart-store";
+import {
+  RibbonFillPrimitive,
+  hexToRgba,
+  type RibbonBand,
+} from "@/components/chart/ribbonFill";
 import { formatPrice, formatVolume } from "@/lib/format";
 import { IndicatorPill } from "./IndicatorPill";
 import { MeasureOverlay } from "./MeasureOverlay";
@@ -138,8 +143,9 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const wt1Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const wt2Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const wt0Ref = useRef<ISeriesApi<"Line"> | null>(null);
-  /** The five EMA ribbon lines, fast → slow */
-  const ribbonRefs = useRef<(ISeriesApi<"Line"> | null)[]>([]);
+  /** One line series per configured ribbon EMA, fast → slow */
+  const ribbonRefs = useRef<ISeriesApi<"Line">[]>([]);
+  const ribbonFillRef = useRef<RibbonFillPrimitive | null>(null);
   const candlesRef = useRef<Candle[]>([]);
   const priceLinesMapRef = useRef<Map<string, IPriceLine>>(new Map());
 
@@ -162,6 +168,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   symbolRef.current = symbol;
   const configRef = useRef(config);
   configRef.current = config;
+  const ribbonVisibleRef = useRef(false);
+  ribbonVisibleRef.current = indicators.ribbon && !hidden.ribbon;
 
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const [lastPrice, setLastPrice] = useState<{ value: number; pct: number } | null>(null);
@@ -252,15 +260,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       lastValueVisible: false,
     });
 
-    ribbonRefs.current = RIBBON_COLORS.map((color, i) =>
-      chart.addSeries(LineSeries, {
-        color,
-        lineWidth: RIBBON_WIDTHS[i],
-        priceLineVisible: false,
-        lastValueVisible: false,
-        visible: false,
-      }),
-    );
+    ribbonFillRef.current = new RibbonFillPrimitive();
+    candleSeriesRef.current.attachPrimitive(ribbonFillRef.current);
 
     chartRef.current = chart;
 
@@ -368,6 +369,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       ema50Ref.current = null;
       ema200Ref.current = null;
       ribbonRefs.current = [];
+      ribbonFillRef.current = null;
       rsiRef.current = null;
       rsi30Ref.current = null;
       rsi70Ref.current = null;
@@ -701,7 +703,6 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     ema20Ref.current?.applyOptions({ visible: v("ema20") });
     ema50Ref.current?.applyOptions({ visible: v("ema50") });
     ema200Ref.current?.applyOptions({ visible: v("ema200") });
-    ribbonRefs.current.forEach((s) => s?.applyOptions({ visible: v("ribbon") }));
     if (rsiRef.current) rsiRef.current.applyOptions({ visible: v("rsi") });
     if (rsi30Ref.current) rsi30Ref.current.applyOptions({ visible: v("rsi") });
     if (rsi70Ref.current) rsi70Ref.current.applyOptions({ visible: v("rsi") });
@@ -733,15 +734,46 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     updateEMAs();
   }, [config.ema20, config.ema50, config.ema200]);
 
+  // Keep one line series per configured ribbon EMA. The count can change at
+  // runtime (user adds/removes lines), so series are created and destroyed here
+  // rather than up front with the rest of the chart.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    const lines = config.ribbonLines;
+    const refs = ribbonRefs.current;
+
+    while (refs.length > lines.length) {
+      const series = refs.pop();
+      if (series) chart.removeSeries(series);
+    }
+    while (refs.length < lines.length) {
+      refs.push(
+        chart.addSeries(LineSeries, {
+          priceLineVisible: false,
+          lastValueVisible: false,
+          visible: false,
+        }),
+      );
+    }
+
+    const show = indicators.ribbon && !hidden.ribbon;
+    lines.forEach((line, i) => {
+      refs[i].applyOptions({
+        color: line.color,
+        lineWidth: line.width as LineWidth,
+        visible: show && line.enabled,
+      });
+    });
+
+    updateRibbon();
+  }, [config.ribbonLines, indicators.ribbon, hidden.ribbon]);
+
+  // Repaint the shaded band when its own settings change
   useEffect(() => {
     updateRibbon();
-  }, [
-    config.ribbon1,
-    config.ribbon2,
-    config.ribbon3,
-    config.ribbon4,
-    config.ribbon5,
-  ]);
+  }, [config.ribbonFill, config.ribbonFillOpacity]);
 
   useEffect(() => {
     updateRSI();
@@ -850,25 +882,70 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     const c = candlesRef.current;
     if (c.length === 0 || ribbonRefs.current.length === 0) return;
     const cfg = configRef.current;
-    const periods = [
-      cfg.ribbon1,
-      cfg.ribbon2,
-      cfg.ribbon3,
-      cfg.ribbon4,
-      cfg.ribbon5,
-    ];
+    const lines = cfg.ribbonLines;
 
-    const lasts = periods.map((period, i) => {
-      const series = ribbonRefs.current[i];
-      if (!series) return undefined;
-      const data = ema(c, period);
-      series.setData(
+    // Compute every line once — reused for the series, the pill and the fill.
+    const series = lines.map((line) => ema(c, line.period));
+    series.forEach((data, i) => {
+      ribbonRefs.current[i]?.setData(
         data.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })),
       );
-      return data.at(-1)?.value;
     });
 
-    setLastValues((prev) => ({ ...prev, ribbon: lasts }));
+    setLastValues((prev) => ({
+      ...prev,
+      ribbon: lines.map((line, i) =>
+        line.enabled ? series[i].at(-1)?.value : undefined,
+      ),
+    }));
+
+    updateRibbonFill(lines, series);
+  }
+
+  /** Shade between the fastest and slowest *enabled* EMA. */
+  function updateRibbonFill(
+    lines: RibbonLine[],
+    series: { time: number; value: number }[][],
+  ) {
+    const fill = ribbonFillRef.current;
+    if (!fill) return;
+
+    const cfg = configRef.current;
+    // An EMA whose period exceeds the loaded candle count yields no points.
+    // Span the band across the enabled EMAs that actually have data, so a too-slow
+    // line degrades the fill instead of erasing it.
+    const enabled = lines
+      .map((line, i) => ({ line, data: series[i] }))
+      .filter((x) => x.line.enabled && x.data.length > 0);
+
+    const show =
+      ribbonVisibleRef.current && cfg.ribbonFill && enabled.length >= 2;
+    if (!show) {
+      fill.setData([], "transparent", false);
+      return;
+    }
+
+    const fast = enabled[0];
+    const slow = enabled[enabled.length - 1];
+
+    // The slower EMA starts later, so align on time rather than index.
+    const slowByTime = new Map(slow.data.map((p) => [p.time, p.value]));
+    const bands: RibbonBand[] = [];
+    for (const p of fast.data) {
+      const slowValue = slowByTime.get(p.time);
+      if (slowValue === undefined) continue;
+      bands.push({
+        time: p.time as UTCTimestamp,
+        top: Math.max(p.value, slowValue),
+        bottom: Math.min(p.value, slowValue),
+      });
+    }
+
+    fill.setData(
+      bands,
+      hexToRgba(fast.line.color, cfg.ribbonFillOpacity),
+      true,
+    );
   }
 
   function updateRSI() {
@@ -1193,11 +1270,13 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   void renderTick;
 
   // Ribbon bias: EMAs stacked fast→slow descending = uptrend, ascending = downtrend,
-  // anything else means the EMAs are tangled (no clear trend).
+  // anything else means the EMAs are tangled (no clear trend). Disabled lines
+  // report `undefined` and are excluded rather than breaking the read.
   const ribbonBias = (() => {
-    const r = lastValues.ribbon;
-    if (!r || r.length === 0 || r.some((x) => x === undefined)) return undefined;
-    const v = r as number[];
+    const v = (lastValues.ribbon ?? []).filter(
+      (x): x is number => x !== undefined,
+    );
+    if (v.length < 2) return undefined;
     if (v.every((x, i) => i === 0 || v[i - 1] > x)) return "Alcista";
     if (v.every((x, i) => i === 0 || v[i - 1] < x)) return "Bajista";
     return "Rango";
@@ -1301,9 +1380,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           )}
           {indicators.ribbon && (
             <IndicatorPill
-              name={`Cinta EMAs ${config.ribbon1}/${config.ribbon2}/${config.ribbon3}/${config.ribbon4}/${config.ribbon5}`}
+              name={`Cinta EMAs ${config.ribbonLines
+                .filter((l) => l.enabled)
+                .map((l) => l.period)
+                .join("/")}`}
               value={ribbonBias}
-              color={INDICATOR_COLORS.ribbon}
+              color={config.ribbonLines.find((l) => l.enabled)?.color ?? INDICATOR_COLORS.ribbon}
               hidden={hidden.ribbon}
               onToggleHide={() => toggleHidden("ribbon")}
               onSettings={() => setSettingsTarget("ribbon")}

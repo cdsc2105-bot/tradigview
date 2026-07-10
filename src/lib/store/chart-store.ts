@@ -46,13 +46,32 @@ export interface IndicatorConfig {
   wtChannel: number;
   wtAvg: number;
   wtSignal: number;
-  /** EMA ribbon periods, fast → slow */
-  ribbon1: number;
-  ribbon2: number;
-  ribbon3: number;
-  ribbon4: number;
-  ribbon5: number;
+  /** EMA ribbon lines, ordered fast → slow */
+  ribbonLines: RibbonLine[];
+  /** Shade the area between the fastest and slowest enabled EMA */
+  ribbonFill: boolean;
+  /** Opacity of that shading, 0–100 */
+  ribbonFillOpacity: number;
 }
+
+/** One configurable line of the EMA ribbon. */
+export interface RibbonLine {
+  period: number;
+  color: string;
+  /** Stroke width in px, 1–4 */
+  width: number;
+  enabled: boolean;
+}
+
+export const MAX_RIBBON_LINES = 8;
+
+export const DEFAULT_RIBBON_LINES: RibbonLine[] = [
+  { period: 9, color: "#22d3ee", width: 1, enabled: true },
+  { period: 21, color: "#2962ff", width: 1, enabled: true },
+  { period: 50, color: "#26a69a", width: 2, enabled: true },
+  { period: 100, color: "#ffb74d", width: 2, enabled: true },
+  { period: 200, color: "#ef5350", width: 2, enabled: true },
+];
 
 export const DEFAULT_CONFIG: IndicatorConfig = {
   ema20: 20,
@@ -72,24 +91,10 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   wtChannel: 9,
   wtAvg: 12,
   wtSignal: 3,
-  ribbon1: 9,
-  ribbon2: 21,
-  ribbon3: 50,
-  ribbon4: 100,
-  ribbon5: 200,
+  ribbonLines: DEFAULT_RIBBON_LINES,
+  ribbonFill: true,
+  ribbonFillOpacity: 10,
 };
-
-/** Colors for each EMA ribbon line, fast → slow. */
-export const RIBBON_COLORS = [
-  "#22d3ee", // 9  — celeste
-  "#2962ff", // 21 — azul
-  "#26a69a", // 50 — verde
-  "#ffb74d", // 100 — amarillo
-  "#ef5350", // 200 — rojo
-] as const;
-
-/** Line width for each ribbon EMA — slower EMAs are drawn thicker. */
-export const RIBBON_WIDTHS = [1, 1, 2, 2, 2] as const;
 
 export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
   ema20: "#ffb74d",
@@ -106,17 +111,46 @@ export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
   ribbon: "#22d3ee",
 };
 
+/**
+ * Not every symbol exists on both venues — HYPEUSDT is Bitget-only, for
+ * instance. The watchlist filters each section against the exchange's real
+ * symbol list, so listing a pair here that one venue lacks is harmless.
+ */
 export const DEFAULT_WATCHLIST = [
   "BTCUSDT",
   "ETHUSDT",
   "SOLUSDT",
+  "HYPEUSDT",
   "BNBUSDT",
   "XRPUSDT",
   "DOGEUSDT",
   "ADAUSDT",
   "AVAXUSDT",
   "LINKUSDT",
-  "MATICUSDT",
+  "SUIUSDT",
+  "APTUSDT",
+  "ARBUSDT",
+  "OPUSDT",
+  "TIAUSDT",
+  "SEIUSDT",
+  "INJUSDT",
+  "TAOUSDT",
+  "NEARUSDT",
+  "DOTUSDT",
+  "LTCUSDT",
+  "BCHUSDT",
+  "TRXUSDT",
+  "ATOMUSDT",
+  "POLUSDT",
+  "ONDOUSDT",
+  "ENAUSDT",
+  "RENDERUSDT",
+  "WLDUSDT",
+  "PEPEUSDT",
+  "WIFUSDT",
+  "JUPUSDT",
+  "AAVEUSDT",
+  "UNIUSDT",
 ];
 
 interface ChartState {
@@ -146,6 +180,10 @@ interface ChartState {
   removeIndicator: (key: IndicatorKey) => void;
   toggleHidden: (key: IndicatorKey) => void;
   setConfig: (patch: Partial<IndicatorConfig>) => void;
+  setRibbonLine: (index: number, patch: Partial<RibbonLine>) => void;
+  addRibbonLine: () => void;
+  removeRibbonLine: (index: number) => void;
+  resetRibbon: () => void;
   addToWatchlist: (s: string) => void;
   removeFromWatchlist: (s: string) => void;
   setTool: (t: DrawingTool) => void;
@@ -189,7 +227,10 @@ export const useChartStore = create<ChartState>()(
         wavetrend: false,
         ribbon: false,
       },
-      config: { ...DEFAULT_CONFIG },
+      config: {
+        ...DEFAULT_CONFIG,
+        ribbonLines: DEFAULT_RIBBON_LINES.map((l) => ({ ...l })),
+      },
       watchlist: DEFAULT_WATCHLIST,
       tool: "cursor",
       priceLines: [],
@@ -216,6 +257,48 @@ export const useChartStore = create<ChartState>()(
         set((s) => ({ hidden: { ...s.hidden, [key]: !s.hidden[key] } })),
       setConfig: (patch) =>
         set((s) => ({ config: { ...s.config, ...patch } })),
+      setRibbonLine: (index, patch) =>
+        set((s) => ({
+          config: {
+            ...s.config,
+            ribbonLines: s.config.ribbonLines.map((l, i) =>
+              i === index ? { ...l, ...patch } : l,
+            ),
+          },
+        })),
+      addRibbonLine: () =>
+        set((s) => {
+          if (s.config.ribbonLines.length >= MAX_RIBBON_LINES) return s;
+          const slowest = s.config.ribbonLines.at(-1);
+          const next: RibbonLine = {
+            period: Math.min((slowest?.period ?? 50) * 2, 500),
+            color: "#787b86",
+            width: 2,
+            enabled: true,
+          };
+          return {
+            config: { ...s.config, ribbonLines: [...s.config.ribbonLines, next] },
+          };
+        }),
+      removeRibbonLine: (index) =>
+        set((s) => {
+          if (s.config.ribbonLines.length <= 1) return s;
+          return {
+            config: {
+              ...s.config,
+              ribbonLines: s.config.ribbonLines.filter((_, i) => i !== index),
+            },
+          };
+        }),
+      resetRibbon: () =>
+        set((s) => ({
+          config: {
+            ...s.config,
+            ribbonLines: DEFAULT_RIBBON_LINES.map((l) => ({ ...l })),
+            ribbonFill: DEFAULT_CONFIG.ribbonFill,
+            ribbonFillOpacity: DEFAULT_CONFIG.ribbonFillOpacity,
+          },
+        })),
       addToWatchlist: (s) =>
         set((state) => ({
           watchlist: state.watchlist.includes(s)
@@ -263,13 +346,29 @@ export const useChartStore = create<ChartState>()(
       }),
       merge: (persisted, current) => {
         const p = persisted as Partial<ChartState>;
+
+        // Older persisted states predate `ribbonLines` (they stored ribbon1…ribbon5)
+        // and could carry an empty array, which would leave the ribbon undrawable.
+        const persistedLines = p.config?.ribbonLines;
+        const ribbonLines =
+          Array.isArray(persistedLines) && persistedLines.length > 0
+            ? persistedLines
+            : DEFAULT_RIBBON_LINES.map((l) => ({ ...l }));
+
+        // Keep whatever the user added, but surface newly shipped defaults
+        // (e.g. HYPEUSDT) instead of freezing them out of an old watchlist.
+        const extras = (p.watchlist ?? []).filter(
+          (s) => !DEFAULT_WATCHLIST.includes(s),
+        );
+
         return {
           ...current,
           ...p,
           exchange: p.exchange ?? "binance",
           indicators: { ...current.indicators, ...p.indicators },
           hidden: { ...current.hidden, ...p.hidden },
-          config: { ...current.config, ...p.config },
+          config: { ...current.config, ...p.config, ribbonLines },
+          watchlist: [...DEFAULT_WATCHLIST, ...extras],
         };
       },
     },

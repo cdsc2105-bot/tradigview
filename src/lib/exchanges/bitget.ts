@@ -83,7 +83,7 @@ export async function fetchBitgetTicker(symbol: string): Promise<Ticker24h> {
   }
 
   const json = await res.json();
-  const data = json.data?.[0] ?? json.data;
+  const data = (json.data?.[0] ?? json.data) as Record<string, unknown>;
 
   return mapTicker(data);
 }
@@ -105,19 +105,39 @@ export async function fetchBitgetTickers(
   }
 
   const json = await res.json();
-  const data: unknown[] = json.data ?? [];
+  const data: Record<string, unknown>[] = json.data ?? [];
 
   const requested = new Set(symbols.map((s) => s.toUpperCase()));
 
   return data
-    .filter((t: any) => requested.has(String(t.symbol).toUpperCase()))
+    .filter((t) => requested.has(String(t.symbol).toUpperCase()))
     .map(mapTicker);
+}
+
+/**
+ * Every USDT-margined perpetual symbol listed on Bitget.
+ * Bitget lists pairs Binance doesn't (e.g. HYPEUSDT), so the watchlist and
+ * symbol search need to know what actually exists per exchange.
+ */
+export async function fetchBitgetSymbols(): Promise<string[]> {
+  const params = new URLSearchParams({ productType: "USDT-FUTURES" });
+
+  const res = await fetch(`${BITGET_BASE}/tickers?${params}`);
+  if (!res.ok) {
+    throw new Error(`Bitget symbols error: ${res.status} ${res.statusText}`);
+  }
+
+  const json = await res.json();
+  const data: { symbol?: string }[] = json.data ?? [];
+  return data
+    .map((t) => String(t.symbol ?? "").toUpperCase())
+    .filter(Boolean);
 }
 
 /**
  * Map a raw Bitget ticker response object to our Ticker24h interface.
  */
-function mapTicker(raw: any): Ticker24h {
+function mapTicker(raw: Record<string, unknown>): Ticker24h {
   const lastPrice = Number(raw.lastPr ?? raw.last ?? 0);
   const open24h = Number(raw.open24h ?? raw.openUtc ?? 0);
   const priceChange = lastPrice - open24h;

@@ -11,38 +11,44 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { fetchExchangeSymbols } from "@/lib/binance/rest";
+import { fetchSupportedSymbols } from "@/lib/exchanges/symbols";
 import { useChartStore } from "@/lib/store/chart-store";
 import { cn } from "@/lib/utils";
-import type { SymbolInfo } from "@/lib/binance/types";
 
 export function SymbolSelector() {
   const symbol = useChartStore((s) => s.symbol);
+  const exchange = useChartStore((s) => s.exchange);
   const setSymbol = useChartStore((s) => s.setSymbol);
   const addToWatchlist = useChartStore((s) => s.addToWatchlist);
   const open = useChartStore((s) => s.symbolDialogOpen);
   const setOpen = useChartStore((s) => s.setSymbolDialogOpen);
 
   const [query, setQuery] = useState("");
-  const [allSymbols, setAllSymbols] = useState<SymbolInfo[]>([]);
+  const [allSymbols, setAllSymbols] = useState<string[]>([]);
 
+  // Search the venue the chart is actually on — Bitget lists pairs (HYPEUSDT)
+  // that Binance doesn't, and vice versa.
   useEffect(() => {
-    if (open && allSymbols.length === 0) {
-      fetchExchangeSymbols().then(setAllSymbols).catch(console.error);
-    }
-  }, [open, allSymbols.length]);
+    if (!open) return;
+    let cancelled = false;
+    fetchSupportedSymbols(exchange)
+      .then((set) => {
+        if (!cancelled) setAllSymbols([...set].sort());
+      })
+      .catch(console.error);
+    return () => {
+      cancelled = true;
+    };
+  }, [open, exchange]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();
-    if (!q) return allSymbols.slice(0, 100);
-    return allSymbols
-      .filter(
-        (s) =>
-          s.symbol.includes(q) ||
-          s.baseAsset.includes(q) ||
-          s.quoteAsset.includes(q),
-      )
-      .slice(0, 100);
+    const base = q ? allSymbols.filter((s) => s.includes(q)) : allSymbols;
+    return base.slice(0, 100).map((s) => ({
+      symbol: s,
+      baseAsset: s.endsWith("USDT") ? s.slice(0, -4) : s,
+      quoteAsset: s.endsWith("USDT") ? "USDT" : "",
+    }));
   }, [query, allSymbols]);
 
   return (
@@ -54,7 +60,12 @@ export function SymbolSelector() {
       </DialogTrigger>
       <DialogContent className="max-w-md gap-0 bg-tv-panel p-0">
         <DialogHeader className="border-b border-tv-border px-4 py-3">
-          <DialogTitle className="text-sm font-medium">Buscar símbolo</DialogTitle>
+          <DialogTitle className="text-sm font-medium">
+            Buscar símbolo en{" "}
+            <span className="text-tv-blue">
+              {exchange === "bitget" ? "Bitget Perp" : "Binance"}
+            </span>
+          </DialogTitle>
         </DialogHeader>
         <div className="border-b border-tv-border p-3">
           <Input
