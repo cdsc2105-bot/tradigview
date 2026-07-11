@@ -51,7 +51,7 @@ export function IndicatorSettingsDialog() {
       <DialogContent
         className={cn(
           "bg-tv-panel",
-          target === "ribbon" ? "max-w-md" : "max-w-sm",
+          target === "ribbon" || target === "vwap" ? "max-w-md" : "max-w-sm",
         )}
       >
         <DialogHeader>
@@ -126,12 +126,13 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
         wtAvg: clamp(draft.wtAvg, 2, 100),
         wtSignal: clamp(draft.wtSignal, 2, 50),
       });
-    else if (target === "vwap" || target === "volume") onSave({});
+    else if (target === "volume") onSave({});
   }
 
-  // The ribbon has a variable number of lines and edits apply live, so it
-  // manages its own state instead of the shared draft/Apply flow.
+  // The ribbon and VWAP edit live (variable band counts, colors, fills), so they
+  // manage their own state instead of the shared draft/Apply flow.
   if (target === "ribbon") return <RibbonEditor />;
+  if (target === "vwap") return <VwapEditor />;
 
   return (
     <div className="flex flex-col gap-3">
@@ -233,11 +234,6 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
             onChange={(n) => setDraft((d) => ({ ...d, wtSignal: n }))}
           />
         </div>
-      )}
-      {target === "vwap" && (
-        <p className="text-xs text-tv-text-muted">
-          VWAP se calcula automáticamente y se resetea al inicio de cada día UTC.
-        </p>
       )}
       {target === "volume" && (
         <p className="text-xs text-tv-text-muted">
@@ -411,6 +407,107 @@ function RibbonEditor() {
         >
           Reset cinta
         </Button>
+        <Button
+          size="sm"
+          onClick={() => setTarget(null)}
+          className="bg-tv-blue hover:bg-tv-blue/90"
+        >
+          Listo
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function VwapEditor() {
+  const config = useChartStore((s) => s.config);
+  const setConfig = useChartStore((s) => s.setConfig);
+  const setTarget = useChartStore((s) => s.setSettingsTarget);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
+            Color VWAP
+          </span>
+          <input
+            type="color"
+            value={config.vwapColor}
+            onChange={(e) => setConfig({ vwapColor: e.target.value })}
+            aria-label="Color de la línea VWAP"
+            className="h-8 w-full cursor-pointer rounded border border-tv-border bg-tv-bg p-0.5"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
+            Color bandas
+          </span>
+          <input
+            type="color"
+            value={config.vwapBandColor}
+            onChange={(e) => setConfig({ vwapBandColor: e.target.value })}
+            aria-label="Color de las bandas de desviación"
+            className="h-8 w-full cursor-pointer rounded border border-tv-border bg-tv-bg p-0.5"
+          />
+        </label>
+      </div>
+
+      <label className="flex flex-col gap-1">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
+          Bandas de desviación (σ)
+        </span>
+        <select
+          value={config.vwapBands}
+          onChange={(e) => setConfig({ vwapBands: parseInt(e.target.value, 10) })}
+          className="h-8 rounded border border-tv-border bg-tv-bg px-1.5 text-xs text-tv-text"
+        >
+          <option value={0}>Sin bandas (solo VWAP)</option>
+          <option value={1}>1σ</option>
+          <option value={2}>1σ, 2σ</option>
+          <option value={3}>1σ, 2σ, 3σ</option>
+          <option value={4}>1σ, 2σ, 3σ, 4σ</option>
+        </select>
+      </label>
+
+      <div className="flex flex-col gap-2 border-t border-tv-border pt-3">
+        <label className="flex items-center gap-2 text-xs text-tv-text">
+          <input
+            type="checkbox"
+            checked={config.vwapFill}
+            onChange={(e) => setConfig({ vwapFill: e.target.checked })}
+            className="h-3.5 w-3.5 accent-tv-blue"
+          />
+          Sombrear las bandas (cloud)
+        </label>
+
+        {config.vwapFill && (
+          <label className="flex items-center gap-2 text-xs text-tv-text-muted">
+            <span className="w-20 shrink-0">Opacidad</span>
+            <input
+              type="range"
+              min={0}
+              max={30}
+              value={config.vwapFillOpacity}
+              onChange={(e) =>
+                setConfig({ vwapFillOpacity: parseInt(e.target.value, 10) })
+              }
+              className="flex-1 accent-tv-blue"
+            />
+            <span className="w-8 text-right tabular-nums">
+              {config.vwapFillOpacity}%
+            </span>
+          </label>
+        )}
+      </div>
+
+      <p className="text-xs text-tv-text-muted">
+        El VWAP se resetea al inicio de cada día UTC. Las bandas son desviaciones
+        estándar ponderadas por volumen: el precio tiende a volver hacia el VWAP,
+        y las bandas externas (2σ–3σ) marcan zonas de sobre-extensión.
+      </p>
+
+      <div className="mt-1 flex justify-end">
         <Button
           size="sm"
           onClick={() => setTarget(null)}

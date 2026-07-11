@@ -20,15 +20,17 @@ import { ema, rsi, macd, bollingerBands, stochastic, superTrend, vwap, waveTrend
 import type { Candle, Timeframe } from "@/lib/binance/types";
 import {
   INDICATOR_COLORS,
+  VWAP_BAND_MULTIPLIERS,
   useChartStore,
   type IndicatorKey,
   type RibbonLine,
 } from "@/lib/store/chart-store";
 import {
-  RibbonFillPrimitive,
+  BandFillPrimitive,
   hexToRgba,
-  type RibbonBand,
-} from "@/components/chart/ribbonFill";
+  type FillBand,
+  type FillRegion,
+} from "@/components/chart/bandFill";
 import { formatPrice, formatVolume } from "@/lib/format";
 import { IndicatorPill } from "./IndicatorPill";
 import { MeasureOverlay } from "./MeasureOverlay";
@@ -136,16 +138,15 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const stBullRef = useRef<ISeriesApi<"Line"> | null>(null);
   const stBearRef = useRef<ISeriesApi<"Line"> | null>(null);
   const vwapRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const vwapU1Ref = useRef<ISeriesApi<"Line"> | null>(null);
-  const vwapL1Ref = useRef<ISeriesApi<"Line"> | null>(null);
-  const vwapU2Ref = useRef<ISeriesApi<"Line"> | null>(null);
-  const vwapL2Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  /** Deviation-band line series, ordered upper-innermost…outer then lower-inner…outer */
+  const vwapBandRefs = useRef<ISeriesApi<"Line">[]>([]);
+  const vwapFillRef = useRef<BandFillPrimitive | null>(null);
   const wt1Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const wt2Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const wt0Ref = useRef<ISeriesApi<"Line"> | null>(null);
   /** One line series per configured ribbon EMA, fast → slow */
   const ribbonRefs = useRef<ISeriesApi<"Line">[]>([]);
-  const ribbonFillRef = useRef<RibbonFillPrimitive | null>(null);
+  const ribbonFillRef = useRef<BandFillPrimitive | null>(null);
   const candlesRef = useRef<Candle[]>([]);
   const priceLinesMapRef = useRef<Map<string, IPriceLine>>(new Map());
 
@@ -170,6 +171,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   configRef.current = config;
   const ribbonVisibleRef = useRef(false);
   ribbonVisibleRef.current = indicators.ribbon && !hidden.ribbon;
+  const vwapVisibleRef = useRef(false);
+  vwapVisibleRef.current = indicators.vwap && !hidden.vwap;
 
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const [lastPrice, setLastPrice] = useState<{ value: number; pct: number } | null>(null);
@@ -260,8 +263,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       lastValueVisible: false,
     });
 
-    ribbonFillRef.current = new RibbonFillPrimitive();
+    ribbonFillRef.current = new BandFillPrimitive();
     candleSeriesRef.current.attachPrimitive(ribbonFillRef.current);
+    vwapFillRef.current = new BandFillPrimitive();
+    candleSeriesRef.current.attachPrimitive(vwapFillRef.current);
 
     chartRef.current = chart;
 
@@ -386,10 +391,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       stBullRef.current = null;
       stBearRef.current = null;
       vwapRef.current = null;
-      vwapU1Ref.current = null;
-      vwapL1Ref.current = null;
-      vwapU2Ref.current = null;
-      vwapL2Ref.current = null;
+      vwapBandRefs.current = [];
+      vwapFillRef.current = null;
       wt1Ref.current = null;
       wt2Ref.current = null;
       wt0Ref.current = null;
@@ -646,31 +649,65 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [indicators.supertrend]);
 
-  // VWAP — overlay on main pane
+  // VWAP — center line + N deviation bands per side, overlaid on the main pane.
+  // The band count is configurable, so band series are created/destroyed here.
   useEffect(() => {
-    if (!chartRef.current) return;
+    const chart = chartRef.current;
+    if (!chart) return;
+
     if (indicators.vwap && !vwapRef.current) {
-      const c = INDICATOR_COLORS.vwap;
-      vwapRef.current = chartRef.current.addSeries(LineSeries, { color: c, lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
-      vwapU1Ref.current = chartRef.current.addSeries(LineSeries, { color: c, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
-      vwapL1Ref.current = chartRef.current.addSeries(LineSeries, { color: c, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
-      vwapU2Ref.current = chartRef.current.addSeries(LineSeries, { color: c, lineWidth: 1, lineStyle: 3, priceLineVisible: false, lastValueVisible: false });
-      vwapL2Ref.current = chartRef.current.addSeries(LineSeries, { color: c, lineWidth: 1, lineStyle: 3, priceLineVisible: false, lastValueVisible: false });
-      updateVWAP();
-    } else if (!indicators.vwap && vwapRef.current && chartRef.current) {
-      chartRef.current.removeSeries(vwapRef.current);
-      chartRef.current.removeSeries(vwapU1Ref.current!);
-      chartRef.current.removeSeries(vwapL1Ref.current!);
-      chartRef.current.removeSeries(vwapU2Ref.current!);
-      chartRef.current.removeSeries(vwapL2Ref.current!);
+      vwapRef.current = chart.addSeries(LineSeries, {
+        color: config.vwapColor,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+    } else if (!indicators.vwap && vwapRef.current) {
+      chart.removeSeries(vwapRef.current);
+      vwapBandRefs.current.forEach((s) => chart.removeSeries(s));
       vwapRef.current = null;
-      vwapU1Ref.current = null;
-      vwapL1Ref.current = null;
-      vwapU2Ref.current = null;
-      vwapL2Ref.current = null;
+      vwapBandRefs.current = [];
+      vwapFillRef.current?.setRegions([], false);
+      return;
     }
+
+    if (!vwapRef.current) return;
+
+    vwapRef.current.applyOptions({ color: config.vwapColor });
+
+    // Two band lines per σ level (upper + lower). Reconcile the pool to 2×count.
+    const wanted = Math.max(0, Math.min(4, config.vwapBands)) * 2;
+    const refs = vwapBandRefs.current;
+    while (refs.length > wanted) {
+      const s = refs.pop();
+      if (s) chart.removeSeries(s);
+    }
+    while (refs.length < wanted) {
+      refs.push(
+        chart.addSeries(LineSeries, {
+          color: config.vwapBandColor,
+          lineWidth: 1,
+          lineStyle: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        }),
+      );
+    }
+    refs.forEach((s) =>
+      s.applyOptions({ color: config.vwapBandColor, visible: !hidden.vwap }),
+    );
+
+    updateVWAP();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [indicators.vwap]);
+  }, [
+    indicators.vwap,
+    hidden.vwap,
+    config.vwapBands,
+    config.vwapColor,
+    config.vwapBandColor,
+    config.vwapFill,
+    config.vwapFillOpacity,
+  ]);
 
   // WaveTrend pane
   useEffect(() => {
@@ -719,11 +756,11 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (stoch80Ref.current) stoch80Ref.current.applyOptions({ visible: v("stoch") });
     if (stBullRef.current) stBullRef.current.applyOptions({ visible: v("supertrend") });
     if (stBearRef.current) stBearRef.current.applyOptions({ visible: v("supertrend") });
-    if (vwapRef.current) vwapRef.current.applyOptions({ visible: v("vwap") });
-    if (vwapU1Ref.current) vwapU1Ref.current.applyOptions({ visible: v("vwap") });
-    if (vwapL1Ref.current) vwapL1Ref.current.applyOptions({ visible: v("vwap") });
-    if (vwapU2Ref.current) vwapU2Ref.current.applyOptions({ visible: v("vwap") });
-    if (vwapL2Ref.current) vwapL2Ref.current.applyOptions({ visible: v("vwap") });
+    if (vwapRef.current) {
+      vwapRef.current.applyOptions({ visible: v("vwap") });
+      vwapBandRefs.current.forEach((s) => s.applyOptions({ visible: v("vwap") }));
+      updateVWAP(); // refresh the shaded fill for the new visibility
+    }
     if (wt1Ref.current) wt1Ref.current.applyOptions({ visible: v("wavetrend") });
     if (wt2Ref.current) wt2Ref.current.applyOptions({ visible: v("wavetrend") });
     if (wt0Ref.current) wt0Ref.current.applyOptions({ visible: v("wavetrend") });
@@ -921,7 +958,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     const show =
       ribbonVisibleRef.current && cfg.ribbonFill && enabled.length >= 2;
     if (!show) {
-      fill.setData([], "transparent", false);
+      fill.setRegions([], false);
       return;
     }
 
@@ -930,7 +967,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     // The slower EMA starts later, so align on time rather than index.
     const slowByTime = new Map(slow.data.map((p) => [p.time, p.value]));
-    const bands: RibbonBand[] = [];
+    const bands: FillBand[] = [];
     for (const p of fast.data) {
       const slowValue = slowByTime.get(p.time);
       if (slowValue === undefined) continue;
@@ -941,9 +978,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       });
     }
 
-    fill.setData(
-      bands,
-      hexToRgba(fast.line.color, cfg.ribbonFillOpacity),
+    fill.setRegions(
+      [{ bands, color: hexToRgba(fast.line.color, cfg.ribbonFillOpacity) }],
       true,
     );
   }
@@ -1071,13 +1107,69 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   function updateVWAP() {
     const c = candlesRef.current;
     if (c.length === 0 || !vwapRef.current) return;
+    const cfg = configRef.current;
     const data = vwap(c);
-    vwapRef.current.setData(data.map((p) => ({ time: p.time as UTCTimestamp, value: p.vwap })));
-    vwapU1Ref.current?.setData(data.map((p) => ({ time: p.time as UTCTimestamp, value: p.upper1 })));
-    vwapL1Ref.current?.setData(data.map((p) => ({ time: p.time as UTCTimestamp, value: p.lower1 })));
-    vwapU2Ref.current?.setData(data.map((p) => ({ time: p.time as UTCTimestamp, value: p.upper2 })));
-    vwapL2Ref.current?.setData(data.map((p) => ({ time: p.time as UTCTimestamp, value: p.lower2 })));
+
+    vwapRef.current.setData(
+      data.map((p) => ({ time: p.time as UTCTimestamp, value: p.vwap })),
+    );
+
+    // Bands: refs are laid out [upper σ1, lower σ1, upper σ2, lower σ2, …].
+    const count = Math.max(0, Math.min(4, cfg.vwapBands));
+    for (let k = 0; k < count; k++) {
+      const mult = VWAP_BAND_MULTIPLIERS[k];
+      vwapBandRefs.current[k * 2]?.setData(
+        data.map((p) => ({
+          time: p.time as UTCTimestamp,
+          value: p.vwap + mult * p.sd,
+        })),
+      );
+      vwapBandRefs.current[k * 2 + 1]?.setData(
+        data.map((p) => ({
+          time: p.time as UTCTimestamp,
+          value: p.vwap - mult * p.sd,
+        })),
+      );
+    }
+
+    updateVWAPFill(data, count);
     setLastValues((prev) => ({ ...prev, vwapVal: data.at(-1)?.vwap }));
+  }
+
+  /** Shade each consecutive VWAP band (vwap→σ1, σ1→σ2, …) above and below. */
+  function updateVWAPFill(
+    data: { time: number; vwap: number; sd: number }[],
+    count: number,
+  ) {
+    const fill = vwapFillRef.current;
+    if (!fill) return;
+
+    const cfg = configRef.current;
+    const show = vwapVisibleRef.current && cfg.vwapFill && count >= 1;
+    if (!show) {
+      fill.setRegions([], false);
+      return;
+    }
+
+    const color = hexToRgba(cfg.vwapBandColor, cfg.vwapFillOpacity);
+    const regions: FillRegion[] = [];
+
+    // Multiplier levels including the center line (0) as the innermost edge.
+    const levels = [0, ...VWAP_BAND_MULTIPLIERS.slice(0, count)];
+    for (let k = 0; k < count; k++) {
+      const inner = levels[k];
+      const outer = levels[k + 1];
+      const upper: FillBand[] = [];
+      const lower: FillBand[] = [];
+      for (const p of data) {
+        const t = p.time as UTCTimestamp;
+        upper.push({ time: t, top: p.vwap + outer * p.sd, bottom: p.vwap + inner * p.sd });
+        lower.push({ time: t, top: p.vwap - inner * p.sd, bottom: p.vwap - outer * p.sd });
+      }
+      regions.push({ bands: upper, color }, { bands: lower, color });
+    }
+
+    fill.setRegions(regions, true);
   }
 
   function updateWaveTrend() {
@@ -1431,9 +1523,9 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           )}
           {indicators.vwap && (
             <IndicatorPill
-              name="VWAP"
+              name={config.vwapBands > 0 ? `VWAP ±${config.vwapBands}σ` : "VWAP"}
               value={lastValues.vwapVal !== undefined ? formatPrice(lastValues.vwapVal) : undefined}
-              color={INDICATOR_COLORS.vwap}
+              color={config.vwapColor}
               hidden={hidden.vwap}
               onToggleHide={() => toggleHidden("vwap")}
               onSettings={() => setSettingsTarget("vwap")}

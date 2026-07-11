@@ -285,14 +285,13 @@ export function superTrend(
 export interface VWAPPoint {
   time: number;
   vwap: number;
-  upper1: number;
-  lower1: number;
-  upper2: number;
-  lower2: number;
+  /** Volume-weighted standard deviation at this point (bands = vwap ± k·sd) */
+  sd: number;
 }
 
 /**
- * VWAP with 1σ and 2σ bands.  Resets at the start of each UTC day.
+ * VWAP plus the volume-weighted standard deviation, so callers can draw any
+ * number of deviation bands (vwap ± k·sd). Resets at the start of each UTC day.
  */
 export function vwap(candles: Candle[]): VWAPPoint[] {
   const out: VWAPPoint[] = [];
@@ -321,7 +320,7 @@ export function vwap(candles: Candle[]): VWAPPoint[] {
     cumTP2 += tp * tp * c.volume;
 
     if (cumVol === 0) {
-      out.push({ time: c.time, vwap: tp, upper1: tp, lower1: tp, upper2: tp, lower2: tp });
+      out.push({ time: c.time, vwap: tp, sd: 0 });
       continue;
     }
 
@@ -330,14 +329,7 @@ export function vwap(candles: Candle[]): VWAPPoint[] {
     const variance = cumTP2 / cumVol - vwapVal * vwapVal;
     const sd = Math.sqrt(Math.max(0, variance));
 
-    out.push({
-      time: c.time,
-      vwap: vwapVal,
-      upper1: vwapVal + sd,
-      lower1: vwapVal - sd,
-      upper2: vwapVal + 2 * sd,
-      lower2: vwapVal - 2 * sd,
-    });
+    out.push({ time: c.time, vwap: vwapVal, sd });
   }
   return out;
 }

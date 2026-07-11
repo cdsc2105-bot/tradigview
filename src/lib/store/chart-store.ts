@@ -52,7 +52,20 @@ export interface IndicatorConfig {
   ribbonFill: boolean;
   /** Opacity of that shading, 0–100 */
   ribbonFillOpacity: number;
+  /** VWAP center-line color */
+  vwapColor: string;
+  /** VWAP deviation-band color (lines + shading) */
+  vwapBandColor: string;
+  /** How many σ bands to draw each side of the VWAP, 0–4 */
+  vwapBands: number;
+  /** Shade the area between consecutive VWAP bands */
+  vwapFill: boolean;
+  /** Opacity of that shading, 0–100 */
+  vwapFillOpacity: number;
 }
+
+/** Standard-deviation multipliers for each VWAP band, innermost → outermost. */
+export const VWAP_BAND_MULTIPLIERS = [1, 2, 3, 4] as const;
 
 /** One configurable line of the EMA ribbon. */
 export interface RibbonLine {
@@ -94,6 +107,11 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   ribbonLines: DEFAULT_RIBBON_LINES,
   ribbonFill: true,
   ribbonFillOpacity: 10,
+  vwapColor: "#2962ff",
+  vwapBandColor: "#26a69a",
+  vwapBands: 3,
+  vwapFill: true,
+  vwapFillOpacity: 8,
 };
 
 export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
@@ -200,8 +218,8 @@ export const useChartStore = create<ChartState>()(
       exchange: "binance" as Exchange,
       timeframe: "15m" as Timeframe,
       indicators: {
-        ema20: true,
-        ema50: true,
+        ema20: false,
+        ema50: false,
         ema200: false,
         rsi: true,
         macd: false,
@@ -209,9 +227,9 @@ export const useChartStore = create<ChartState>()(
         bb: false,
         stoch: false,
         supertrend: false,
-        vwap: false,
-        wavetrend: false,
-        ribbon: false,
+        vwap: true,
+        wavetrend: true,
+        ribbon: true,
       },
       hidden: {
         ema20: false,
