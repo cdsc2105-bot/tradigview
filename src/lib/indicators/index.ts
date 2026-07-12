@@ -447,3 +447,96 @@ export function waveTrend(
 
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Ichimoku Kinko Hyo (Ichimoku Cloud)
+// ---------------------------------------------------------------------------
+
+export interface IchimokuResult {
+  /** Tenkan-sen (conversion line), at candle time */
+  tenkan: IndicatorPoint[];
+  /** Kijun-sen (base line), at candle time */
+  kijun: IndicatorPoint[];
+  /** Senkou Span A (leading span A), shifted `displacement` bars forward */
+  senkouA: IndicatorPoint[];
+  /** Senkou Span B (leading span B), shifted `displacement` bars forward */
+  senkouB: IndicatorPoint[];
+  /** Chikou Span (lagging span), shifted `displacement` bars back */
+  chikou: IndicatorPoint[];
+}
+
+/**
+ * Ichimoku Cloud.
+ *
+ * Senkou spans are projected `displacement` bars into the future (past the last
+ * candle), and Chikou is projected the same amount into the past — matching how
+ * TradingView draws it. Future timestamps are extrapolated from the candle
+ * spacing so the cloud extends beyond the last bar.
+ */
+export function ichimoku(
+  candles: Candle[],
+  tenkanPeriod = 9,
+  kijunPeriod = 26,
+  senkouBPeriod = 52,
+  displacement = 26,
+): IchimokuResult {
+  const n = candles.length;
+  if (n === 0) {
+    return { tenkan: [], kijun: [], senkouA: [], senkouB: [], chikou: [] };
+  }
+
+  // Uniform bar spacing (unix seconds) used to project future span times.
+  const interval = n > 1 ? candles[1].time - candles[0].time : 60;
+  const lastTime = candles[n - 1].time;
+
+  /** Midpoint of the highest high and lowest low over the trailing `period`. */
+  const midpoint = (period: number, i: number): number | undefined => {
+    if (i < period - 1) return undefined;
+    let hi = -Infinity;
+    let lo = Infinity;
+    for (let j = i - period + 1; j <= i; j++) {
+      if (candles[j].high > hi) hi = candles[j].high;
+      if (candles[j].low < lo) lo = candles[j].low;
+    }
+    return (hi + lo) / 2;
+  };
+
+  /** Time of the bar `displacement` ahead of i, extrapolated past the end. */
+  const forwardTime = (i: number): number => {
+    const idx = i + displacement;
+    return idx < n ? candles[idx].time : lastTime + (idx - (n - 1)) * interval;
+  };
+
+  const result: IchimokuResult = {
+    tenkan: [],
+    kijun: [],
+    senkouA: [],
+    senkouB: [],
+    chikou: [],
+  };
+
+  for (let i = 0; i < n; i++) {
+    const t = midpoint(tenkanPeriod, i);
+    const k = midpoint(kijunPeriod, i);
+    const b = midpoint(senkouBPeriod, i);
+
+    if (t !== undefined) result.tenkan.push({ time: candles[i].time, value: t });
+    if (k !== undefined) result.kijun.push({ time: candles[i].time, value: k });
+
+    // Senkou A = (Tenkan + Kijun)/2, Senkou B = 52-bar midpoint — shifted forward.
+    if (t !== undefined && k !== undefined) {
+      result.senkouA.push({ time: forwardTime(i), value: (t + k) / 2 });
+    }
+    if (b !== undefined) {
+      result.senkouB.push({ time: forwardTime(i), value: b });
+    }
+
+    // Chikou = close shifted back.
+    const backIdx = i - displacement;
+    if (backIdx >= 0) {
+      result.chikou.push({ time: candles[backIdx].time, value: candles[i].close });
+    }
+  }
+
+  return result;
+}

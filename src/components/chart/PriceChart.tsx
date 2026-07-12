@@ -16,10 +16,11 @@ import {
 import { fetchKlines } from "@/lib/binance/rest";
 import { fetchBitgetKlines } from "@/lib/exchanges/bitget";
 import { getBinanceWS } from "@/lib/binance/ws";
-import { ema, rsi, macd, bollingerBands, stochastic, superTrend, vwap, waveTrend } from "@/lib/indicators";
+import { ema, rsi, macd, bollingerBands, stochastic, superTrend, vwap, waveTrend, ichimoku } from "@/lib/indicators";
 import type { Candle, Timeframe } from "@/lib/binance/types";
 import {
   INDICATOR_COLORS,
+  ICHIMOKU_COLORS,
   VWAP_BAND_MULTIPLIERS,
   useChartStore,
   type IndicatorKey,
@@ -107,6 +108,8 @@ interface LastValues {
   wt2?: number;
   /** Last value of each EMA ribbon line, fast → slow */
   ribbon?: (number | undefined)[];
+  /** Ichimoku cloud bias from the last Senkou A vs B */
+  ichiBias?: "Alcista" | "Bajista";
 }
 
 interface PaneOffset {
@@ -147,6 +150,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   /** One line series per configured ribbon EMA, fast → slow */
   const ribbonRefs = useRef<ISeriesApi<"Line">[]>([]);
   const ribbonFillRef = useRef<BandFillPrimitive | null>(null);
+  const ichiTenkanRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const ichiKijunRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const ichiSpanARef = useRef<ISeriesApi<"Line"> | null>(null);
+  const ichiSpanBRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const ichiChikouRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const ichiCloudRef = useRef<BandFillPrimitive | null>(null);
   const candlesRef = useRef<Candle[]>([]);
   const priceLinesMapRef = useRef<Map<string, IPriceLine>>(new Map());
 
@@ -173,6 +182,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   ribbonVisibleRef.current = indicators.ribbon && !hidden.ribbon;
   const vwapVisibleRef = useRef(false);
   vwapVisibleRef.current = indicators.vwap && !hidden.vwap;
+  const ichiVisibleRef = useRef(false);
+  ichiVisibleRef.current = indicators.ichimoku && !hidden.ichimoku;
 
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const [lastPrice, setLastPrice] = useState<{ value: number; pct: number } | null>(null);
@@ -267,6 +278,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     candleSeriesRef.current.attachPrimitive(ribbonFillRef.current);
     vwapFillRef.current = new BandFillPrimitive();
     candleSeriesRef.current.attachPrimitive(vwapFillRef.current);
+    ichiCloudRef.current = new BandFillPrimitive();
+    candleSeriesRef.current.attachPrimitive(ichiCloudRef.current);
 
     chartRef.current = chart;
 
@@ -375,6 +388,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       ema200Ref.current = null;
       ribbonRefs.current = [];
       ribbonFillRef.current = null;
+      ichiTenkanRef.current = null;
+      ichiKijunRef.current = null;
+      ichiSpanARef.current = null;
+      ichiSpanBRef.current = null;
+      ichiChikouRef.current = null;
+      ichiCloudRef.current = null;
       rsiRef.current = null;
       rsi30Ref.current = null;
       rsi70Ref.current = null;
@@ -709,6 +728,52 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     config.vwapFillOpacity,
   ]);
 
+  // Ichimoku Cloud — 5 lines + shaded cloud, all on the main pane
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    if (indicators.ichimoku && !ichiTenkanRef.current) {
+      const line = (color: string, width: number, style = 0) =>
+        chart.addSeries(LineSeries, {
+          color,
+          lineWidth: width as LineWidth,
+          lineStyle: style,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+      ichiTenkanRef.current = line(ICHIMOKU_COLORS.tenkan, 1);
+      ichiKijunRef.current = line(ICHIMOKU_COLORS.kijun, 1);
+      ichiSpanARef.current = line(ICHIMOKU_COLORS.senkouA, 1);
+      ichiSpanBRef.current = line(ICHIMOKU_COLORS.senkouB, 1);
+      ichiChikouRef.current = line(ICHIMOKU_COLORS.chikou, 1, 2);
+      updateIchimoku();
+    } else if (!indicators.ichimoku && ichiTenkanRef.current) {
+      [
+        ichiTenkanRef,
+        ichiKijunRef,
+        ichiSpanARef,
+        ichiSpanBRef,
+        ichiChikouRef,
+      ].forEach((r) => {
+        if (r.current) chart.removeSeries(r.current);
+        r.current = null;
+      });
+      ichiCloudRef.current?.setRegions([], false);
+      return;
+    }
+
+    if (ichiTenkanRef.current) updateIchimoku();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    indicators.ichimoku,
+    hidden.ichimoku,
+    config.ichiTenkan,
+    config.ichiKijun,
+    config.ichiSenkouB,
+    config.ichiDisplacement,
+  ]);
+
   // WaveTrend pane
   useEffect(() => {
     if (!chartRef.current) return;
@@ -764,6 +829,15 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (wt1Ref.current) wt1Ref.current.applyOptions({ visible: v("wavetrend") });
     if (wt2Ref.current) wt2Ref.current.applyOptions({ visible: v("wavetrend") });
     if (wt0Ref.current) wt0Ref.current.applyOptions({ visible: v("wavetrend") });
+    if (ichiTenkanRef.current) {
+      const vis = v("ichimoku");
+      ichiTenkanRef.current.applyOptions({ visible: vis });
+      ichiKijunRef.current?.applyOptions({ visible: vis });
+      ichiSpanARef.current?.applyOptions({ visible: vis });
+      ichiSpanBRef.current?.applyOptions({ visible: vis });
+      ichiChikouRef.current?.applyOptions({ visible: vis });
+      updateIchimoku(); // refresh cloud fill for the new visibility
+    }
   }, [indicators, hidden]);
 
   // Recompute indicators when config changes (periods)
@@ -1172,6 +1246,100 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     fill.setRegions(regions, true);
   }
 
+  function updateIchimoku() {
+    const c = candlesRef.current;
+    if (c.length === 0 || !ichiTenkanRef.current) return;
+    const cfg = configRef.current;
+    const d = ichimoku(
+      c,
+      cfg.ichiTenkan,
+      cfg.ichiKijun,
+      cfg.ichiSenkouB,
+      cfg.ichiDisplacement,
+    );
+
+    const line = (pts: { time: number; value: number }[]) =>
+      pts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value }));
+
+    ichiTenkanRef.current.setData(line(d.tenkan));
+    ichiKijunRef.current?.setData(line(d.kijun));
+    ichiSpanARef.current?.setData(line(d.senkouA));
+    ichiSpanBRef.current?.setData(line(d.senkouB));
+    ichiChikouRef.current?.setData(line(d.chikou));
+
+    updateIchimokuCloud(d.senkouA, d.senkouB);
+
+    const lastA = d.senkouA.at(-1)?.value;
+    const lastB = d.senkouB.at(-1)?.value;
+    setLastValues((prev) => ({
+      ...prev,
+      ichiBias:
+        lastA !== undefined && lastB !== undefined
+          ? lastA >= lastB
+            ? "Alcista"
+            : "Bajista"
+          : undefined,
+    }));
+  }
+
+  /**
+   * Shade the Kumo between Senkou A and B, split into contiguous green (A≥B)
+   * and red (A<B) runs so the cloud flips color on each crossover like TradingView.
+   */
+  function updateIchimokuCloud(
+    spanA: { time: number; value: number }[],
+    spanB: { time: number; value: number }[],
+  ) {
+    const cloud = ichiCloudRef.current;
+    if (!cloud) return;
+    if (!ichiVisibleRef.current || spanA.length < 2 || spanB.length < 2) {
+      cloud.setRegions([], false);
+      return;
+    }
+
+    const bByTime = new Map(spanB.map((p) => [p.time, p.value]));
+    const up = hexToRgba(ICHIMOKU_COLORS.cloudUp, 12);
+    const down = hexToRgba(ICHIMOKU_COLORS.cloudDown, 12);
+
+    const regions: FillRegion[] = [];
+    let current: FillBand[] = [];
+    let currentUp: boolean | null = null;
+
+    const flush = () => {
+      if (current.length >= 2) {
+        regions.push({ bands: current, color: currentUp ? up : down });
+      }
+      current = [];
+    };
+
+    for (const a of spanA) {
+      const b = bByTime.get(a.time);
+      if (b === undefined) continue;
+      const isUp = a.value >= b;
+      if (currentUp === null) currentUp = isUp;
+      if (isUp !== currentUp) {
+        // Carry the crossover point into both segments so they meet with no gap.
+        const boundary: FillBand = {
+          time: a.time as UTCTimestamp,
+          top: Math.max(a.value, b),
+          bottom: Math.min(a.value, b),
+        };
+        current.push(boundary);
+        flush();
+        currentUp = isUp;
+        current.push(boundary);
+      }
+      current.push({
+        time: a.time as UTCTimestamp,
+        top: Math.max(a.value, b),
+        bottom: Math.min(a.value, b),
+      });
+    }
+    flush();
+
+    cloud.setRegions(regions, true);
+  }
+
   function updateWaveTrend() {
     const c = candlesRef.current;
     if (c.length === 0 || !wt1Ref.current) return;
@@ -1230,6 +1398,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         updateSuperTrend();
         updateVWAP();
         updateWaveTrend();
+        updateIchimoku();
         chartRef.current?.timeScale().fitContent();
         requestAnimationFrame(() => recomputePaneOffsets());
 
@@ -1282,6 +1451,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             updateSuperTrend();
             updateVWAP();
             updateWaveTrend();
+            updateIchimoku();
             const prev = arr[arr.length - 2] ?? lastCandle;
             setLastPrice({
               value: k.close,
@@ -1530,6 +1700,17 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
               onToggleHide={() => toggleHidden("vwap")}
               onSettings={() => setSettingsTarget("vwap")}
               onRemove={() => removeIndicator("vwap")}
+            />
+          )}
+          {indicators.ichimoku && (
+            <IndicatorPill
+              name={`Ichimoku ${config.ichiTenkan}/${config.ichiKijun}/${config.ichiSenkouB}`}
+              value={lastValues.ichiBias}
+              color={INDICATOR_COLORS.ichimoku}
+              hidden={hidden.ichimoku}
+              onToggleHide={() => toggleHidden("ichimoku")}
+              onSettings={() => setSettingsTarget("ichimoku")}
+              onRemove={() => removeIndicator("ichimoku")}
             />
           )}
         </div>

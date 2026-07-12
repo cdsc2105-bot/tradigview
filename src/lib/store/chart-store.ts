@@ -18,7 +18,8 @@ export type IndicatorKey =
   | "supertrend"
   | "vwap"
   | "wavetrend"
-  | "ribbon";
+  | "ribbon"
+  | "ichimoku";
 
 export type DrawingTool = "cursor" | "hline" | "measure" | "eraser";
 
@@ -62,6 +63,14 @@ export interface IndicatorConfig {
   vwapFill: boolean;
   /** Opacity of that shading, 0–100 */
   vwapFillOpacity: number;
+  /** Ichimoku Tenkan-sen period */
+  ichiTenkan: number;
+  /** Ichimoku Kijun-sen period */
+  ichiKijun: number;
+  /** Ichimoku Senkou Span B period */
+  ichiSenkouB: number;
+  /** Ichimoku forward/backward displacement */
+  ichiDisplacement: number;
 }
 
 /** Standard-deviation multipliers for each VWAP band, innermost → outermost. */
@@ -112,7 +121,22 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   vwapBands: 3,
   vwapFill: true,
   vwapFillOpacity: 8,
+  ichiTenkan: 9,
+  ichiKijun: 26,
+  ichiSenkouB: 52,
+  ichiDisplacement: 26,
 };
+
+/** Ichimoku line colors, matching TradingView's defaults. */
+export const ICHIMOKU_COLORS = {
+  tenkan: "#2962ff", // conversion — blue
+  kijun: "#ef5350", // base — red
+  senkouA: "#26a69a", // leading span A — green
+  senkouB: "#ef5350", // leading span B — red
+  chikou: "#9c27b0", // lagging — purple
+  cloudUp: "#26a69a", // bullish cloud fill
+  cloudDown: "#ef5350", // bearish cloud fill
+} as const;
 
 export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
   ema20: "#ffb74d",
@@ -127,6 +151,7 @@ export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
   vwap: "#e040fb",
   wavetrend: "#26c6da",
   ribbon: "#22d3ee",
+  ichimoku: "#26a69a",
 };
 
 /**
@@ -233,6 +258,7 @@ export const useChartStore = create<ChartState>()(
         vwap: true,
         wavetrend: true,
         ribbon: true,
+        ichimoku: false,
       },
       hidden: {
         ema20: false,
@@ -247,6 +273,7 @@ export const useChartStore = create<ChartState>()(
         vwap: false,
         wavetrend: false,
         ribbon: false,
+        ichimoku: false,
       },
       config: {
         ...DEFAULT_CONFIG,

@@ -110,6 +110,14 @@ const ENTRIES: Entry[] = [
     keywords: "supertrend tendencia atr seguidor stop",
   },
   {
+    key: "ichimoku",
+    group: "Tendencia",
+    label: (c) =>
+      `Ichimoku (${c.ichiTenkan}, ${c.ichiKijun}, ${c.ichiSenkouB})`,
+    desc: "Nube de Ichimoku: tendencia, soporte/resistencia y momentum.",
+    keywords: "ichimoku nube kumo cloud tenkan kijun senkou chikou tendencia japones",
+  },
+  {
     key: "vwap",
     group: "Volumen",
     label: (c) => (c.vwapBands > 0 ? `VWAP ±${c.vwapBands}σ` : "VWAP"),

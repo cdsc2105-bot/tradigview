@@ -31,6 +31,7 @@ const TITLES: Record<IndicatorKey, string> = {
   vwap: "VWAP",
   wavetrend: "WaveTrend",
   ribbon: "Cinta de EMAs",
+  ichimoku: "Ichimoku",
 };
 
 export function IndicatorSettingsDialog() {
@@ -125,6 +126,13 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
         wtChannel: clamp(draft.wtChannel, 2, 100),
         wtAvg: clamp(draft.wtAvg, 2, 100),
         wtSignal: clamp(draft.wtSignal, 2, 50),
+      });
+    else if (target === "ichimoku")
+      onSave({
+        ichiTenkan: clamp(draft.ichiTenkan, 2, 100),
+        ichiKijun: clamp(draft.ichiKijun, 2, 200),
+        ichiSenkouB: clamp(draft.ichiSenkouB, 2, 400),
+        ichiDisplacement: clamp(draft.ichiDisplacement, 1, 100),
       });
     else if (target === "volume") onSave({});
   }
@@ -234,6 +242,37 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
             onChange={(n) => setDraft((d) => ({ ...d, wtSignal: n }))}
           />
         </div>
+      )}
+      {target === "ichimoku" && (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <Field
+              label="Tenkan"
+              value={draft.ichiTenkan}
+              onChange={(n) => setDraft((d) => ({ ...d, ichiTenkan: n }))}
+            />
+            <Field
+              label="Kijun"
+              value={draft.ichiKijun}
+              onChange={(n) => setDraft((d) => ({ ...d, ichiKijun: n }))}
+            />
+            <Field
+              label="Senkou B"
+              value={draft.ichiSenkouB}
+              onChange={(n) => setDraft((d) => ({ ...d, ichiSenkouB: n }))}
+            />
+            <Field
+              label="Desplazamiento"
+              value={draft.ichiDisplacement}
+              onChange={(n) => setDraft((d) => ({ ...d, ichiDisplacement: n }))}
+            />
+          </div>
+          <p className="text-xs text-tv-text-muted">
+            Precio sobre la nube = tendencia alcista; debajo = bajista; dentro =
+            indecisión. La nube verde/roja proyecta soporte y resistencia a
+            futuro.
+          </p>
+        </>
       )}
       {target === "volume" && (
         <p className="text-xs text-tv-text-muted">
