@@ -122,6 +122,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const volumeMaRef = useRef<ISeriesApi<"Line"> | null>(null);
   const ema20Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const ema50Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const ema200Ref = useRef<ISeriesApi<"Line"> | null>(null);
@@ -382,6 +383,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
+      volumeMaRef.current = null;
       priceLinesMapRef.current.clear();
       ema20Ref.current = null;
       ema50Ref.current = null;
@@ -435,15 +437,30 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       );
       v.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
       volumeSeriesRef.current = v;
+      // Volume moving-average line (red), on the same volume price scale
+      volumeMaRef.current = chartRef.current.addSeries(
+        LineSeries,
+        {
+          priceScaleId: "volume",
+          color: TV_COLORS.red,
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        },
+        0,
+      );
       const data = candlesRef.current.map((k) => ({
         time: k.time as UTCTimestamp,
         value: k.volume,
         color: k.close >= k.open ? `${TV_COLORS.green}66` : `${TV_COLORS.red}66`,
       }));
       v.setData(data);
+      updateVolumeMa();
     } else if (!indicators.volume && volumeSeriesRef.current && chartRef.current) {
       chartRef.current.removeSeries(volumeSeriesRef.current);
+      if (volumeMaRef.current) chartRef.current.removeSeries(volumeMaRef.current);
       volumeSeriesRef.current = null;
+      volumeMaRef.current = null;
     }
     requestAnimationFrame(() => recomputePaneOffsets());
   }, [indicators.volume]);
@@ -812,6 +829,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (macdSignalRef.current) macdSignalRef.current.applyOptions({ visible: v("macd") });
     if (macdHistRef.current) macdHistRef.current.applyOptions({ visible: v("macd") });
     if (volumeSeriesRef.current) volumeSeriesRef.current.applyOptions({ visible: v("volume") });
+    if (volumeMaRef.current) volumeMaRef.current.applyOptions({ visible: v("volume") });
     if (bbUpperRef.current) bbUpperRef.current.applyOptions({ visible: v("bb") });
     if (bbMiddleRef.current) bbMiddleRef.current.applyOptions({ visible: v("bb") });
     if (bbLowerRef.current) bbLowerRef.current.applyOptions({ visible: v("bb") });
@@ -949,6 +967,23 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     }
     if (tool !== "measure") setMeasure(INITIAL_MEASURE);
   }, [tool]);
+
+  /** 21-period SMA of volume, drawn as a line over the volume histogram. */
+  function updateVolumeMa() {
+    const c = candlesRef.current;
+    if (!volumeMaRef.current || c.length === 0) return;
+    const period = 21;
+    const out: { time: UTCTimestamp; value: number }[] = [];
+    let sum = 0;
+    for (let i = 0; i < c.length; i++) {
+      sum += c[i].volume;
+      if (i >= period) sum -= c[i - period].volume;
+      if (i >= period - 1) {
+        out.push({ time: c[i].time as UTCTimestamp, value: sum / period });
+      }
+    }
+    volumeMaRef.current.setData(out);
+  }
 
   function updateEMAs() {
     const c = candlesRef.current;
@@ -1390,6 +1425,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           );
         }
         updateEMAs();
+        updateVolumeMa();
         updateRibbon();
         updateRSI();
         updateMACD();
@@ -1443,6 +1479,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
               });
             }
             updateEMAs();
+            updateVolumeMa();
             updateRibbon();
             updateRSI();
             updateMACD();
