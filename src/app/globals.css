@@ -124,4 +124,26 @@
   .tabular-nums {
     font-variant-numeric: tabular-nums;
   }
+  /* Hide the scrollbar on horizontally-scrollable toolbars (mobile header) */
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  /* Mobile watchlist drawer backdrop fade (opacity only — transform-based
+     slide animations hit a Tailwind v4 stale-transform bug on this element) */
+  .animate-fade-in {
+    animation: tv-fade-in 180ms ease-out;
+  }
+}
+
+@keyframes tv-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }

@@ -187,6 +187,8 @@ interface ChartState {
   tool: DrawingTool;
   priceLines: PriceLine[];
   symbolDialogOpen: boolean;
+  /** Watchlist drawer open (mobile only; desktop shows it inline) */
+  watchlistOpen: boolean;
   /** Which indicator's settings dialog is open (null = closed) */
   settingsTarget: IndicatorKey | null;
 
@@ -208,6 +210,7 @@ interface ChartState {
   addPriceLine: (price: number, symbol: string) => void;
   clearPriceLines: (symbol?: string) => void;
   setSymbolDialogOpen: (v: boolean) => void;
+  setWatchlistOpen: (v: boolean) => void;
   setSettingsTarget: (k: IndicatorKey | null) => void;
 }
 
@@ -253,6 +256,7 @@ export const useChartStore = create<ChartState>()(
       tool: "cursor",
       priceLines: [],
       symbolDialogOpen: false,
+      watchlistOpen: false,
       settingsTarget: null,
 
       setSymbol: (symbol) => set({ symbol }),
@@ -349,6 +353,7 @@ export const useChartStore = create<ChartState>()(
             : [],
         })),
       setSymbolDialogOpen: (symbolDialogOpen) => set({ symbolDialogOpen }),
+      setWatchlistOpen: (watchlistOpen) => set({ watchlistOpen }),
       setSettingsTarget: (settingsTarget) => set({ settingsTarget }),
     }),
     {

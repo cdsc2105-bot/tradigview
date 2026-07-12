@@ -34,6 +34,7 @@ export function Watchlist() {
   const setExchange = useChartStore((s) => s.setExchange);
   const removeFromWatchlist = useChartStore((s) => s.removeFromWatchlist);
   const openSymbolDialog = useChartStore((s) => s.setSymbolDialogOpen);
+  const setWatchlistOpen = useChartStore((s) => s.setWatchlistOpen);
 
   const [rows, setRows] = useState<RowMap>({});
   const [flash, setFlash] = useState<Record<string, "up" | "down" | null>>({});
@@ -152,6 +153,7 @@ export function Watchlist() {
   const select = (ex: Exchange, s: string) => {
     setExchange(ex);
     setSymbol(s);
+    setWatchlistOpen(false); // close the mobile drawer after picking
   };
 
   return (
