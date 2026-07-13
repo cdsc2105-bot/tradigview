@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Activity, Check, Search, X } from "lucide-react";
+import { Activity, Check, Search, Settings, X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -137,6 +137,7 @@ export function IndicatorMenu() {
   const indicators = useChartStore((s) => s.indicators);
   const config = useChartStore((s) => s.config);
   const toggle = useChartStore((s) => s.toggleIndicator);
+  const setSettingsTarget = useChartStore((s) => s.setSettingsTarget);
 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -231,39 +232,53 @@ export function IndicatorMenu() {
                   </div>
                   {items.map((e) => {
                     const active = indicators[e.key];
+                    const configurable = e.key !== "volume";
                     return (
-                      <button
+                      <div
                         key={e.key}
-                        onClick={() => toggle(e.key)}
                         className={cn(
-                          "flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-tv-panel-hover",
+                          "flex items-center transition-colors hover:bg-tv-panel-hover",
                           active && "bg-tv-blue/5",
                         )}
                       >
-                        <div
-                          className={cn(
-                            "flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors",
-                            active
-                              ? "border-tv-blue bg-tv-blue text-white"
-                              : "border-tv-border text-transparent",
-                          )}
+                        <button
+                          onClick={() => toggle(e.key)}
+                          className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left"
                         >
-                          <Check className="h-3.5 w-3.5" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-xs font-medium text-tv-text">
-                            {e.label(config)}
+                          <div
+                            className={cn(
+                              "flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors",
+                              active
+                                ? "border-tv-blue bg-tv-blue text-white"
+                                : "border-tv-border text-transparent",
+                            )}
+                          >
+                            <Check className="h-3.5 w-3.5" />
                           </div>
-                          <div className="truncate text-[11px] text-tv-text-muted">
-                            {e.desc}
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-xs font-medium text-tv-text">
+                              {e.label(config)}
+                            </div>
+                            <div className="truncate text-[11px] text-tv-text-muted">
+                              {e.desc}
+                            </div>
                           </div>
-                        </div>
-                        {active && (
-                          <span className="shrink-0 text-[10px] font-medium text-tv-blue">
-                            Activo
-                          </span>
+                        </button>
+                        {active && configurable && (
+                          <button
+                            onClick={() => {
+                              setOpen(false);
+                              setSettingsTarget(e.key);
+                            }}
+                            title="Configurar"
+                            aria-label={`Configurar ${e.label(config)}`}
+                            className="mr-2 flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[10px] font-medium text-tv-blue hover:bg-tv-bg"
+                          >
+                            <Settings className="h-3.5 w-3.5" />
+                            Ajustes
+                          </button>
                         )}
-                      </button>
+                      </div>
                     );
                   })}
                 </div>

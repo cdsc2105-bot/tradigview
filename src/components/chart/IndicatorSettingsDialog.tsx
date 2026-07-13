@@ -40,11 +40,13 @@ export function IndicatorSettingsDialog() {
   const config = useChartStore((s) => s.config);
   const setConfig = useChartStore((s) => s.setConfig);
 
-  const open = target !== null;
+  // Conditionally mounted so it fully closes — base-ui's exit animation lingers
+  // visible with this app's Tailwind setup, so we unmount on close instead.
+  if (target === null) return null;
 
   return (
     <Dialog
-      open={open}
+      open
       onOpenChange={(v) => {
         if (!v) setTarget(null);
       }}
