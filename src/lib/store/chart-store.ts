@@ -160,7 +160,6 @@ export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
  * symbol list, so listing a pair here that one venue lacks is harmless.
  */
 export const DEFAULT_WATCHLIST = [
-  // Majors (roughly by market cap)
   "BTCUSDT",
   "ETHUSDT",
   "SOLUSDT",
@@ -168,18 +167,40 @@ export const DEFAULT_WATCHLIST = [
   "XRPUSDT",
   "DOGEUSDT",
   "ADAUSDT",
-  "TRXUSDT",
   "AVAXUSDT",
   "LINKUSDT",
   "DOTUSDT",
   "LTCUSDT",
+  "TRXUSDT",
+  "HYPEUSDT",
+  "SUIUSDT",
+];
+
+/**
+ * Well-known coins shown first in the symbol search (before the long tail of
+ * obscure listings). Ordered roughly by recognition / market cap.
+ */
+export const POPULAR_SYMBOLS = [
+  "BTCUSDT",
+  "ETHUSDT",
+  "SOLUSDT",
+  "BNBUSDT",
+  "XRPUSDT",
+  "DOGEUSDT",
+  "ADAUSDT",
+  "AVAXUSDT",
+  "LINKUSDT",
+  "DOTUSDT",
+  "LTCUSDT",
+  "TRXUSDT",
   "BCHUSDT",
-  // L1 / L2 / narrativas
   "HYPEUSDT",
   "SUIUSDT",
   "NEARUSDT",
   "APTUSDT",
   "ATOMUSDT",
+  "UNIUSDT",
+  "AAVEUSDT",
   "ARBUSDT",
   "OPUSDT",
   "INJUSDT",
@@ -192,11 +213,14 @@ export const DEFAULT_WATCHLIST = [
   "RENDERUSDT",
   "WLDUSDT",
   "JUPUSDT",
-  "AAVEUSDT",
-  "UNIUSDT",
-  // Memes
+  "FILUSDT",
+  "ETCUSDT",
+  "ALGOUSDT",
   "PEPEUSDT",
   "WIFUSDT",
+  "BONKUSDT",
+  "SHIBUSDT",
+  "FARTCOINUSDT",
 ];
 
 interface ChartState {
@@ -388,6 +412,16 @@ export const useChartStore = create<ChartState>()(
     }),
     {
       name: "tv-gratis-chart-state",
+      // Bump when we need a one-time reset of persisted fields. v1 trims the
+      // watchlist down to the shorter known-coins default.
+      version: 1,
+      migrate: (persisted, version) => {
+        const p = (persisted ?? {}) as Partial<ChartState>;
+        const migrated =
+          version < 1 ? { ...p, watchlist: [...DEFAULT_WATCHLIST] } : p;
+        // merge() below tolerates a partial shape and fills the rest.
+        return migrated as ChartState;
+      },
       partialize: (s) => ({
         symbol: s.symbol,
         exchange: s.exchange,

@@ -11,7 +11,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { fetchSupportedSymbols } from "@/lib/exchanges/symbols";
-import { useChartStore, type Exchange } from "@/lib/store/chart-store";
+import {
+  useChartStore,
+  POPULAR_SYMBOLS,
+  type Exchange,
+} from "@/lib/store/chart-store";
 import { cn } from "@/lib/utils";
 
 const TABS: { key: Exchange; label: string }[] = [
@@ -59,8 +63,26 @@ export function SymbolSelector() {
   const filtered = useMemo(() => {
     const list = symbolsByExchange[tab] ?? [];
     const q = query.trim().toUpperCase();
-    const base = q ? list.filter((s) => s.includes(q)) : list;
-    return base.slice(0, 100).map((s) => ({
+
+    let result: string[];
+    if (!q) {
+      // No search: show only the well-known coins (in popularity order) that
+      // this exchange actually lists — avoids the wall of obscure listings.
+      const listSet = new Set(list);
+      result = POPULAR_SYMBOLS.filter((s) => listSet.has(s));
+    } else {
+      // Searching: match everything, but float known coins to the top.
+      const rank = new Map(POPULAR_SYMBOLS.map((s, i) => [s, i]));
+      result = list
+        .filter((s) => s.includes(q))
+        .sort((a, b) => {
+          const ra = rank.get(a) ?? Infinity;
+          const rb = rank.get(b) ?? Infinity;
+          return ra !== rb ? ra - rb : a.localeCompare(b);
+        });
+    }
+
+    return result.slice(0, 100).map((s) => ({
       symbol: s,
       baseAsset: s.endsWith("USDT") ? s.slice(0, -4) : s,
       quoteAsset: s.endsWith("USDT") ? "USDT" : "",
@@ -133,6 +155,11 @@ export function SymbolSelector() {
 
         <ScrollArea className="h-[380px]">
           <div className="flex flex-col">
+            {!query.trim() && filtered.length > 0 && (
+              <div className="select-none px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
+                Populares · escribe para buscar más
+              </div>
+            )}
             {filtered.length === 0 && (
               <div className="p-4 text-center text-xs text-tv-text-muted">
                 {symbolsByExchange[tab] ? "Sin resultados" : "Cargando…"}

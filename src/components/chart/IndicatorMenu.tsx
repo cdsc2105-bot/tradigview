@@ -188,7 +188,7 @@ export function IndicatorMenu() {
         <DialogContent
           showCloseButton={false}
           style={{ display: "flex", flexDirection: "column" }}
-          className="max-h-[85vh] max-w-md gap-0 overflow-hidden bg-tv-panel p-0"
+          className="max-h-[85vh] max-w-md select-none gap-0 overflow-hidden bg-tv-panel p-0"
         >
           <DialogHeader className="border-b border-tv-border px-3 py-2.5">
             <div className="flex items-center justify-between">
@@ -213,7 +213,7 @@ export function IndicatorMenu() {
                 placeholder="Buscar: EMA, RSI, VWAP, Cipher…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                className="h-8 border-0 bg-transparent px-0 focus-visible:ring-0"
+                className="h-8 select-text border-0 bg-transparent px-0 focus-visible:ring-0"
               />
             </div>
           </div>
@@ -286,8 +286,9 @@ export function IndicatorMenu() {
             </div>
           </ScrollArea>
 
-          <div className="border-t border-tv-border px-3 py-2 text-[11px] text-tv-text-muted">
-            Clic para agregar/quitar · abre el ⚙️ del pill para configurar
+          <div className="select-none border-t border-tv-border px-3 py-2 text-[11px] text-tv-text-muted">
+            Toca un indicador para activarlo o quitarlo · “Ajustes” para
+            configurarlo
           </div>
         </DialogContent>
       </Dialog>
