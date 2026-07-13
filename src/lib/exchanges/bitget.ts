@@ -54,18 +54,31 @@ export async function fetchBitgetKlines(
   const json = await res.json();
   const data: string[][] = json.data ?? [];
 
-  // Response: [timestamp_ms, open, high, low, close, volume_base, volume_quote]
-  // Bitget returns newest first — reverse to match chronological order.
-  return data
-    .map((row) => ({
-      time: Math.floor(Number(row[0]) / 1000),
-      open: Number(row[1]),
-      high: Number(row[2]),
-      low: Number(row[3]),
-      close: Number(row[4]),
-      volume: Number(row[5]),
-    }))
-    .reverse();
+  // Response rows: [timestamp_ms, open, high, low, close, volume_base, volume_quote].
+  // lightweight-charts requires strictly ascending, de-duplicated timestamps, so
+  // sort explicitly rather than assuming the API's order (it returns oldest-first,
+  // but sorting keeps us safe if that ever changes) and drop any duplicate bars.
+  const candles = data.map((row) => ({
+    time: Math.floor(Number(row[0]) / 1000),
+    open: Number(row[1]),
+    high: Number(row[2]),
+    low: Number(row[3]),
+    close: Number(row[4]),
+    volume: Number(row[5]),
+  }));
+
+  candles.sort((a, b) => a.time - b.time);
+
+  const deduped: Candle[] = [];
+  for (const c of candles) {
+    const last = deduped[deduped.length - 1];
+    if (last && last.time === c.time) {
+      deduped[deduped.length - 1] = c; // keep the latest version of the bar
+    } else {
+      deduped.push(c);
+    }
+  }
+  return deduped;
 }
 
 /**

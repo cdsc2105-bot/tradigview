@@ -160,40 +160,43 @@ export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
  * symbol list, so listing a pair here that one venue lacks is harmless.
  */
 export const DEFAULT_WATCHLIST = [
+  // Majors (roughly by market cap)
   "BTCUSDT",
   "ETHUSDT",
   "SOLUSDT",
-  "HYPEUSDT",
   "BNBUSDT",
   "XRPUSDT",
   "DOGEUSDT",
   "ADAUSDT",
+  "TRXUSDT",
   "AVAXUSDT",
   "LINKUSDT",
-  "SUIUSDT",
-  "APTUSDT",
-  "ARBUSDT",
-  "OPUSDT",
-  "TIAUSDT",
-  "SEIUSDT",
-  "INJUSDT",
-  "TAOUSDT",
-  "NEARUSDT",
   "DOTUSDT",
   "LTCUSDT",
   "BCHUSDT",
-  "TRXUSDT",
+  // L1 / L2 / narrativas
+  "HYPEUSDT",
+  "SUIUSDT",
+  "NEARUSDT",
+  "APTUSDT",
   "ATOMUSDT",
+  "ARBUSDT",
+  "OPUSDT",
+  "INJUSDT",
+  "TIAUSDT",
+  "SEIUSDT",
+  "TAOUSDT",
   "POLUSDT",
   "ONDOUSDT",
   "ENAUSDT",
   "RENDERUSDT",
   "WLDUSDT",
-  "PEPEUSDT",
-  "WIFUSDT",
   "JUPUSDT",
   "AAVEUSDT",
   "UNIUSDT",
+  // Memes
+  "PEPEUSDT",
+  "WIFUSDT",
 ];
 
 interface ChartState {
@@ -405,10 +408,14 @@ export const useChartStore = create<ChartState>()(
             ? persistedLines
             : DEFAULT_RIBBON_LINES.map((l) => ({ ...l }));
 
+        // Tokens that were delisted or are commonly added by mistake (HYPERUSDT
+        // is Hyperlane, not Hyperliquid — that's HYPEUSDT on Bitget).
+        const PURGE = new Set(["MATICUSDT", "HYPERUSDT"]);
+
         // Keep whatever the user added, but surface newly shipped defaults
         // (e.g. HYPEUSDT) instead of freezing them out of an old watchlist.
         const extras = (p.watchlist ?? []).filter(
-          (s) => !DEFAULT_WATCHLIST.includes(s),
+          (s) => !DEFAULT_WATCHLIST.includes(s) && !PURGE.has(s),
         );
 
         return {
