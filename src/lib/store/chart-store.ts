@@ -76,10 +76,14 @@ export interface IndicatorConfig {
   rsiDivLeft: number;
   /** Bars to the right — a pivot is only confirmed this many bars later */
   rsiDivRight: number;
-  /** Gray moving-average line over the RSI, like CdeCripto's panel */
+  /** Moving-average line over the RSI, like CdeCripto's panel */
   rsiMa: boolean;
   /** Period of that moving average */
   rsiMaPeriod: number;
+  /** RSI line color (white in CdeCripto's TradingView) */
+  rsiColor: string;
+  /** RSI moving-average color (yellow in his chart) */
+  rsiMaColor: string;
   /** Minutes before/after the session open for the flanking session lines */
   sessionOffsetMin: number;
   /** Ichimoku Tenkan-sen period */
@@ -170,6 +174,8 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   rsiDivRight: 5,
   rsiMa: true,
   rsiMaPeriod: 14,
+  rsiColor: "#d1d4dc",
+  rsiMaColor: "#e2c55a",
   sessionOffsetMin: 90,
   ichiTenkan: 9,
   ichiKijun: 26,
@@ -212,8 +218,17 @@ export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
 export const STOCH_COLORS = {
   k: "#2962ff", // %K blue
   d: "#ff6d00", // %D orange
-  /** Soft purple 20–80 zone, like TV's default band background */
+  /** Soft blue 20–80 zone, TV's stochastic band background */
+  band: "#2196f3",
+} as const;
+
+/** RSI pane extras, matching CdeCripto's TradingView. */
+export const RSI_COLORS = {
+  /** Purple 30–70 background zone, TV's RSI default */
   band: "#7e57c2",
+  /** Divergence trend lines drawn over the RSI */
+  bull: "#26a69a",
+  bear: "#ef5350",
 } as const;
 
 /** Colors of the three session lines, matching CdeCripto's chart. */
@@ -359,7 +374,7 @@ export const useChartStore = create<ChartState>()(
         ribbon: true,
         ichimoku: false,
         session: true,
-        stochrsi: true,
+        stochrsi: false,
       },
       hidden: {
         ema20: false,
@@ -539,7 +554,8 @@ export const useChartStore = create<ChartState>()(
       // watchlist down to the shorter known-coins default. v2 forces the
       // CdeCripto-style VWAP + RSI setup over whatever was saved before.
       // v3 turns on the double-stochastic bottom panes (Stoch RSI + Stoch).
-      version: 3,
+      // v4 matches Matt's real TradingView bottom: RSI + Stochastic only.
+      version: 4,
       migrate: (persisted, version) => {
         const p = (persisted ?? {}) as Partial<ChartState>;
         let migrated =
@@ -581,6 +597,25 @@ export const useChartStore = create<ChartState>()(
               stochK: DEFAULT_CONFIG.stochK,
               stochD: DEFAULT_CONFIG.stochD,
               stochSmooth: DEFAULT_CONFIG.stochSmooth,
+            } as IndicatorConfig,
+          };
+        }
+        if (version < 4) {
+          // A better look at his layout: the bottom is RSI + Stochastic, and the
+          // pane we first read as a second stochastic was the RSI with its
+          // divergence trend lines. Leave Stoch RSI available but off.
+          migrated = {
+            ...migrated,
+            indicators: {
+              ...migrated.indicators,
+              rsi: true,
+              stoch: true,
+              stochrsi: false,
+            } as ChartState["indicators"],
+            config: {
+              ...migrated.config,
+              rsiColor: DEFAULT_CONFIG.rsiColor,
+              rsiMaColor: DEFAULT_CONFIG.rsiMaColor,
             } as IndicatorConfig,
           };
         }

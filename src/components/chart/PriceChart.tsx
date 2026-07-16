@@ -38,6 +38,7 @@ import type { Candle, Timeframe } from "@/lib/binance/types";
 import {
   INDICATOR_COLORS,
   ICHIMOKU_COLORS,
+  RSI_COLORS,
   SESSION_COLORS,
   STOCH_COLORS,
   useChartStore,
@@ -57,6 +58,7 @@ import {
   offsetLabel,
   sessionLines,
 } from "@/components/chart/sessionLines";
+import { SegmentsPrimitive, type Segment } from "@/components/chart/segments";
 import { formatPrice, formatVolume } from "@/lib/format";
 import { IndicatorPill } from "./IndicatorPill";
 import { MeasureOverlay } from "./MeasureOverlay";
@@ -112,11 +114,12 @@ const DIV_LABELS = {
   hidden_bear: "hidden_bear",
 } as const;
 
+// Match the trend-line colors: green for bullish, red for bearish
 const DIV_COLORS = {
   bull: "#26a69a",
-  hidden_bull: "#b2b5be",
-  bear: "#26c6da",
-  hidden_bear: "#26c6da",
+  hidden_bull: "#26a69a",
+  bear: "#ef5350",
+  hidden_bear: "#ef5350",
 } as const;
 
 const TV_COLORS = {
@@ -189,6 +192,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const rsi30Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const rsi50Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const rsi70Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  /** Purple 30–70 zone behind the RSI, like TV's default */
+  const rsiFillRef = useRef<BandFillPrimitive | null>(null);
+  /** Red/green divergence trend lines drawn over the RSI */
+  const rsiSegRef = useRef<SegmentsPrimitive | null>(null);
   const macdRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdSignalRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
@@ -494,6 +501,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       rsi30Ref.current = null;
       rsi50Ref.current = null;
       rsi70Ref.current = null;
+      rsiFillRef.current = null;
+      rsiSegRef.current = null;
       macdRef.current = null;
       macdSignalRef.current = null;
       macdHistRef.current = null;
@@ -589,18 +598,18 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       const r = chartRef.current.addSeries(
         LineSeries,
         {
-          color: INDICATOR_COLORS.rsi,
+          color: configRef.current.rsiColor,
           lineWidth: 1,
           priceLineVisible: false,
           lastValueVisible: true,
         },
         paneIndex,
       );
-      // Gray MA over the RSI, like CdeCripto's panel
+      // MA over the RSI (yellow), like CdeCripto's panel
       const rMa = chartRef.current.addSeries(
         LineSeries,
         {
-          color: "#787b86",
+          color: configRef.current.rsiMaColor,
           lineWidth: 1,
           priceLineVisible: false,
           lastValueVisible: false,
@@ -612,6 +621,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       rsi30Ref.current = guide();
       rsi50Ref.current = guide();
       rsi70Ref.current = guide();
+      rsiFillRef.current = new BandFillPrimitive();
+      r.attachPrimitive(rsiFillRef.current);
+      rsiSegRef.current = new SegmentsPrimitive();
+      r.attachPrimitive(rsiSegRef.current);
       try {
         chartRef.current.panes()[1]?.setStretchFactor(1);
         chartRef.current.panes()[0]?.setStretchFactor(3);
@@ -628,6 +641,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       rsi30Ref.current = null;
       rsi50Ref.current = null;
       rsi70Ref.current = null;
+      rsiFillRef.current = null;
+      rsiSegRef.current = null;
       rsiDivRef.current = null; // its markers plugin died with the series
     }
     requestAnimationFrame(() => recomputePaneOffsets());
@@ -1109,6 +1124,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     config.rsiDivRight,
     config.rsiMa,
     config.rsiMaPeriod,
+    config.rsiColor,
+    config.rsiMaColor,
   ]);
 
   useEffect(() => {
@@ -1313,15 +1330,27 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       time: p.time as UTCTimestamp,
       value: p.value,
     }));
+    rsiRef.current.applyOptions({ color: cfg.rsiColor });
     rsiRef.current.setData(data);
     updateRSIDivergences(c, points);
 
     if (rsiMaRef.current) {
       const ma = cfg.rsiMa ? smoothSMA(points, cfg.rsiMaPeriod) : [];
+      rsiMaRef.current.applyOptions({ color: cfg.rsiMaColor });
       rsiMaRef.current.setData(
         ma.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })),
       );
     }
+
+    // Purple 30–70 zone, TV's default RSI background
+    updateOscillatorZone(
+      rsiFillRef.current,
+      data,
+      !hiddenRef.current.rsi,
+      70,
+      30,
+      RSI_COLORS.band,
+    );
 
     if (data.length > 0) {
       const guide = (series: ISeriesApi<"Line"> | null, level: number) =>
@@ -1353,6 +1382,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     if (!cfg.rsiDiv || hiddenRef.current.rsi) {
       api.setMarkers([]);
+      rsiSegRef.current?.setSegments([], false);
       return;
     }
 
@@ -1368,6 +1398,21 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       };
     });
     api.setMarkers(markers);
+
+    // The red/green trend lines from pivot to pivot, like Matt's RSI pane.
+    // Hidden divergences are dashed so the continuation vs. reversal read is instant.
+    const segments: Segment[] = divs.map((d) => {
+      const bullish = d.kind === "bull" || d.kind === "hidden_bull";
+      return {
+        t1: d.prevTime as UTCTimestamp,
+        v1: d.prevValue,
+        t2: d.time as UTCTimestamp,
+        v2: d.value,
+        color: bullish ? RSI_COLORS.bull : RSI_COLORS.bear,
+        dashed: d.kind === "hidden_bull" || d.kind === "hidden_bear",
+      };
+    });
+    rsiSegRef.current?.setSegments(segments, true);
   }
 
   /** Dashed verticals at the New York open and ±`sessionOffsetMin` around it. */
@@ -1475,11 +1520,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     setLastValues((prev) => ({ ...prev, stochK: last?.k, stochD: last?.d }));
   }
 
-  /** Purple 20–80 background zone behind a 0–100 oscillator, TradingView-style. */
+  /** Soft background zone behind a 0–100 oscillator, TradingView-style. */
   function updateOscillatorZone(
     fill: BandFillPrimitive | null,
     data: { time: number }[],
     visible: boolean,
+    top = 80,
+    bottom = 20,
+    color: string = STOCH_COLORS.band,
   ) {
     if (!fill) return;
     if (!visible || data.length < 2) {
@@ -1490,10 +1538,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       [
         {
           bands: [
-            { time: data[0].time as UTCTimestamp, top: 80, bottom: 20 },
-            { time: data[data.length - 1].time as UTCTimestamp, top: 80, bottom: 20 },
+            { time: data[0].time as UTCTimestamp, top, bottom },
+            { time: data[data.length - 1].time as UTCTimestamp, top, bottom },
           ],
-          color: hexToRgba(STOCH_COLORS.band, 10),
+          color: hexToRgba(color, 10),
         },
       ],
       true,
@@ -2223,7 +2271,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           <IndicatorPill
             name={`RSI ${config.rsi}`}
             value={lastValues.rsi !== undefined ? lastValues.rsi.toFixed(2) : undefined}
-            color={INDICATOR_COLORS.rsi}
+            color={config.rsiColor}
             hidden={hidden.rsi}
             onToggleHide={() => toggleHidden("rsi")}
             onSettings={() => setSettingsTarget("rsi")}

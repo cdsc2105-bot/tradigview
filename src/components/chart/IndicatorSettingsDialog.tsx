@@ -111,6 +111,8 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
         rsiDivRight: clamp(draft.rsiDivRight, 1, 30),
         rsiMa: draft.rsiMa,
         rsiMaPeriod: clamp(draft.rsiMaPeriod, 2, 100),
+        rsiColor: draft.rsiColor,
+        rsiMaColor: draft.rsiMaColor,
       });
     else if (target === "session")
       onSave({ sessionOffsetMin: clamp(draft.sessionOffsetMin, 5, 480) });
@@ -175,11 +177,41 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
       )}
       {target === "rsi" && (
         <>
-          <Field
-            label="Período"
-            value={draft.rsi}
-            onChange={(n) => setDraft((d) => ({ ...d, rsi: n }))}
-          />
+          <div className="grid grid-cols-3 gap-2">
+            <Field
+              label="Período"
+              value={draft.rsi}
+              onChange={(n) => setDraft((d) => ({ ...d, rsi: n }))}
+            />
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
+                Color RSI
+              </span>
+              <input
+                type="color"
+                value={draft.rsiColor}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, rsiColor: e.target.value }))
+                }
+                aria-label="Color de la línea RSI"
+                className="h-9 w-full cursor-pointer rounded border border-tv-border bg-tv-bg p-0.5"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
+                Color media
+              </span>
+              <input
+                type="color"
+                value={draft.rsiMaColor}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, rsiMaColor: e.target.value }))
+                }
+                aria-label="Color de la media del RSI"
+                className="h-9 w-full cursor-pointer rounded border border-tv-border bg-tv-bg p-0.5"
+              />
+            </label>
+          </div>
 
           <div className="flex flex-col gap-2 border-t border-tv-border pt-3">
             <label className="flex items-center gap-2 text-xs text-tv-text">
@@ -191,7 +223,7 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
                 }
                 className="h-3.5 w-3.5 accent-tv-blue"
               />
-              Media móvil del RSI (línea gris)
+              Media móvil del RSI
             </label>
             {draft.rsiMa && (
               <Field

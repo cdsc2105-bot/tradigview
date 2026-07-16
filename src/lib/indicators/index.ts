@@ -81,6 +81,9 @@ export interface Divergence {
   kind: DivergenceKind;
   /** RSI value at the pivot — where the marker is drawn */
   value: number;
+  /** The previous pivot, so callers can draw the connecting trend line */
+  prevTime: number;
+  prevValue: number;
 }
 
 /**
@@ -139,10 +142,16 @@ export function rsiDivergences(
         if (prev && gap >= minBars && gap <= maxBars) {
           const rsiUp = rsiPoints[i].value > rsiPoints[prevLow].value;
           const priceDown = candle.low < prev.low;
+          const link = {
+            time: candle.time,
+            value: rsiPoints[i].value,
+            prevTime: rsiPoints[prevLow].time,
+            prevValue: rsiPoints[prevLow].value,
+          };
           if (priceDown && rsiUp) {
-            out.push({ time: candle.time, kind: "bull", value: rsiPoints[i].value });
+            out.push({ ...link, kind: "bull" });
           } else if (!priceDown && !rsiUp) {
-            out.push({ time: candle.time, kind: "hidden_bull", value: rsiPoints[i].value });
+            out.push({ ...link, kind: "hidden_bull" });
           }
         }
       }
@@ -156,10 +165,16 @@ export function rsiDivergences(
         if (prev && gap >= minBars && gap <= maxBars) {
           const rsiDown = rsiPoints[i].value < rsiPoints[prevHigh].value;
           const priceUp = candle.high > prev.high;
+          const link = {
+            time: candle.time,
+            value: rsiPoints[i].value,
+            prevTime: rsiPoints[prevHigh].time,
+            prevValue: rsiPoints[prevHigh].value,
+          };
           if (priceUp && rsiDown) {
-            out.push({ time: candle.time, kind: "bear", value: rsiPoints[i].value });
+            out.push({ ...link, kind: "bear" });
           } else if (!priceUp && !rsiDown) {
-            out.push({ time: candle.time, kind: "hidden_bear", value: rsiPoints[i].value });
+            out.push({ ...link, kind: "hidden_bear" });
           }
         }
       }
