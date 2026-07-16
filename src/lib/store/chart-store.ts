@@ -19,7 +19,9 @@ export type IndicatorKey =
   | "vwap"
   | "wavetrend"
   | "ribbon"
-  | "ichimoku";
+  | "ichimoku"
+  | "session"
+  | "stochrsi";
 
 export type DrawingTool = "cursor" | "hline" | "measure" | "eraser";
 
@@ -42,6 +44,11 @@ export interface IndicatorConfig {
   stochK: number;
   stochD: number;
   stochSmooth: number;
+  /** Stochastic RSI: RSI length, stochastic length, %K and %D smoothing */
+  srsiRsiLen: number;
+  srsiStochLen: number;
+  srsiK: number;
+  srsiD: number;
   stPeriod: number;
   stMultiplier: number;
   wtChannel: number;
@@ -55,14 +62,26 @@ export interface IndicatorConfig {
   ribbonFillOpacity: number;
   /** VWAP center-line color */
   vwapColor: string;
-  /** VWAP deviation-band color (lines + shading) */
-  vwapBandColor: string;
-  /** How many σ bands to draw each side of the VWAP, 0–4 */
-  vwapBands: number;
+  /** Color of the shading between bands */
+  vwapFillColor: string;
+  /** Deviation bands drawn each side of the VWAP, innermost → outermost */
+  vwapBandLines: VwapBand[];
   /** Shade the area between consecutive VWAP bands */
   vwapFill: boolean;
   /** Opacity of that shading, 0–100 */
   vwapFillOpacity: number;
+  /** Label RSI divergences (bull / hidden_bull / bear / hidden_bear) */
+  rsiDiv: boolean;
+  /** Bars to the left of an RSI pivot that must be lower/higher than it */
+  rsiDivLeft: number;
+  /** Bars to the right — a pivot is only confirmed this many bars later */
+  rsiDivRight: number;
+  /** Gray moving-average line over the RSI, like CdeCripto's panel */
+  rsiMa: boolean;
+  /** Period of that moving average */
+  rsiMaPeriod: number;
+  /** Minutes before/after the session open for the flanking session lines */
+  sessionOffsetMin: number;
   /** Ichimoku Tenkan-sen period */
   ichiTenkan: number;
   /** Ichimoku Kijun-sen period */
@@ -73,8 +92,29 @@ export interface IndicatorConfig {
   ichiDisplacement: number;
 }
 
-/** Standard-deviation multipliers for each VWAP band, innermost → outermost. */
-export const VWAP_BAND_MULTIPLIERS = [1, 2, 3, 4] as const;
+/**
+ * One VWAP deviation band, drawn at vwap ± multiplier·σ (both sides).
+ * TradingView calls these "Multiplicador de bandas #1/#2/#3" — same idea, and
+ * the multiplier is a free number, not a fixed 1σ/2σ/3σ ladder.
+ */
+export interface VwapBand {
+  multiplier: number;
+  enabled: boolean;
+  /** Line color, and the color of its price label on the right axis */
+  color: string;
+}
+
+export const MAX_VWAP_BANDS = 4;
+
+/** Band colors as CdeCripto draws them: 1σ green, 2σ olive, 3σ cyan. */
+export const DEFAULT_VWAP_BANDS: VwapBand[] = [
+  { multiplier: 1, enabled: true, color: "#26a69a" },
+  { multiplier: 2, enabled: true, color: "#b0a83b" },
+  { multiplier: 3, enabled: true, color: "#4dd0e1" },
+];
+
+/** Fallback color for a band the user added past the presets. */
+export const VWAP_BAND_PALETTE = ["#26a69a", "#b0a83b", "#4dd0e1", "#ab47bc"];
 
 /** One configurable line of the EMA ribbon. */
 export interface RibbonLine {
@@ -108,6 +148,10 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   stochK: 14,
   stochD: 3,
   stochSmooth: 3,
+  srsiRsiLen: 14,
+  srsiStochLen: 14,
+  srsiK: 3,
+  srsiD: 3,
   stPeriod: 10,
   stMultiplier: 3,
   wtChannel: 9,
@@ -117,10 +161,16 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   ribbonFill: true,
   ribbonFillOpacity: 10,
   vwapColor: "#2962ff",
-  vwapBandColor: "#26a69a",
-  vwapBands: 3,
+  vwapFillColor: "#26a69a",
+  vwapBandLines: DEFAULT_VWAP_BANDS,
   vwapFill: true,
   vwapFillOpacity: 8,
+  rsiDiv: true,
+  rsiDivLeft: 5,
+  rsiDivRight: 5,
+  rsiMa: true,
+  rsiMaPeriod: 14,
+  sessionOffsetMin: 90,
   ichiTenkan: 9,
   ichiKijun: 26,
   ichiSenkouB: 52,
@@ -142,17 +192,35 @@ export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
   ema20: "#ffb74d",
   ema50: "#2962ff",
   ema200: "#ab47bc",
-  rsi: "#ab47bc",
+  // Blue, like CdeCripto's RSI (was purple)
+  rsi: "#2962ff",
   macd: "#2962ff",
   volume: "#787b86",
   bb: "#e91e63",
-  stoch: "#00bcd4",
+  // TradingView's stochastic defaults: %K blue, %D orange
+  stoch: "#2962ff",
+  stochrsi: "#2962ff",
   supertrend: "#4caf50",
   vwap: "#e040fb",
   wavetrend: "#26c6da",
   ribbon: "#22d3ee",
   ichimoku: "#26a69a",
+  session: "#2962ff",
 };
+
+/** TradingView oscillator styling shared by both stochastic panes. */
+export const STOCH_COLORS = {
+  k: "#2962ff", // %K blue
+  d: "#ff6d00", // %D orange
+  /** Soft purple 20–80 zone, like TV's default band background */
+  band: "#7e57c2",
+} as const;
+
+/** Colors of the three session lines, matching CdeCripto's chart. */
+export const SESSION_COLORS = {
+  open: "#9c27b0", // purple — the New York open itself
+  flank: "#2962ff", // blue — the −1h30 / +1h30 markers
+} as const;
 
 /**
  * Not every symbol exists on both venues — HYPEUSDT is Bitget-only, for
@@ -256,6 +324,10 @@ interface ChartState {
   addRibbonLine: () => void;
   removeRibbonLine: (index: number) => void;
   resetRibbon: () => void;
+  setVwapBand: (index: number, patch: Partial<VwapBand>) => void;
+  addVwapBand: () => void;
+  removeVwapBand: (index: number) => void;
+  resetVwap: () => void;
   addToWatchlist: (s: string) => void;
   removeFromWatchlist: (s: string) => void;
   setTool: (t: DrawingTool) => void;
@@ -280,12 +352,14 @@ export const useChartStore = create<ChartState>()(
         macd: false,
         volume: true,
         bb: false,
-        stoch: false,
+        stoch: true,
         supertrend: false,
         vwap: true,
-        wavetrend: true,
+        wavetrend: false,
         ribbon: true,
         ichimoku: false,
+        session: true,
+        stochrsi: true,
       },
       hidden: {
         ema20: false,
@@ -301,10 +375,13 @@ export const useChartStore = create<ChartState>()(
         wavetrend: false,
         ribbon: false,
         ichimoku: false,
+        session: false,
+        stochrsi: false,
       },
       config: {
         ...DEFAULT_CONFIG,
         ribbonLines: DEFAULT_RIBBON_LINES.map((l) => ({ ...l })),
+        vwapBandLines: DEFAULT_VWAP_BANDS.map((b) => ({ ...b })),
       },
       watchlist: DEFAULT_WATCHLIST,
       tool: "cursor",
@@ -375,6 +452,52 @@ export const useChartStore = create<ChartState>()(
             ribbonFillOpacity: DEFAULT_CONFIG.ribbonFillOpacity,
           },
         })),
+      setVwapBand: (index, patch) =>
+        set((s) => ({
+          config: {
+            ...s.config,
+            vwapBandLines: s.config.vwapBandLines.map((b, i) =>
+              i === index ? { ...b, ...patch } : b,
+            ),
+          },
+        })),
+      addVwapBand: () =>
+        set((s) => {
+          if (s.config.vwapBandLines.length >= MAX_VWAP_BANDS) return s;
+          const outermost = s.config.vwapBandLines.at(-1);
+          const next: VwapBand = {
+            multiplier: Math.min((outermost?.multiplier ?? 0) + 1, 10),
+            enabled: true,
+            color:
+              VWAP_BAND_PALETTE[
+                s.config.vwapBandLines.length % VWAP_BAND_PALETTE.length
+              ],
+          };
+          return {
+            config: {
+              ...s.config,
+              vwapBandLines: [...s.config.vwapBandLines, next],
+            },
+          };
+        }),
+      removeVwapBand: (index) =>
+        set((s) => ({
+          config: {
+            ...s.config,
+            vwapBandLines: s.config.vwapBandLines.filter((_, i) => i !== index),
+          },
+        })),
+      resetVwap: () =>
+        set((s) => ({
+          config: {
+            ...s.config,
+            vwapColor: DEFAULT_CONFIG.vwapColor,
+            vwapFillColor: DEFAULT_CONFIG.vwapFillColor,
+            vwapBandLines: DEFAULT_VWAP_BANDS.map((b) => ({ ...b })),
+            vwapFill: DEFAULT_CONFIG.vwapFill,
+            vwapFillOpacity: DEFAULT_CONFIG.vwapFillOpacity,
+          },
+        })),
       addToWatchlist: (s) =>
         set((state) => ({
           watchlist: state.watchlist.includes(s)
@@ -413,12 +536,54 @@ export const useChartStore = create<ChartState>()(
     {
       name: "tv-gratis-chart-state",
       // Bump when we need a one-time reset of persisted fields. v1 trims the
-      // watchlist down to the shorter known-coins default.
-      version: 1,
+      // watchlist down to the shorter known-coins default. v2 forces the
+      // CdeCripto-style VWAP + RSI setup over whatever was saved before.
+      // v3 turns on the double-stochastic bottom panes (Stoch RSI + Stoch).
+      version: 3,
       migrate: (persisted, version) => {
         const p = (persisted ?? {}) as Partial<ChartState>;
-        const migrated =
+        let migrated =
           version < 1 ? { ...p, watchlist: [...DEFAULT_WATCHLIST] } : p;
+        if (version < 2) {
+          migrated = {
+            ...migrated,
+            indicators: {
+              ...migrated.indicators,
+              rsi: true,
+              vwap: true,
+              session: true,
+            } as ChartState["indicators"],
+            config: {
+              ...migrated.config,
+              vwapColor: DEFAULT_CONFIG.vwapColor,
+              vwapFillColor: DEFAULT_CONFIG.vwapFillColor,
+              vwapBandLines: DEFAULT_VWAP_BANDS.map((b) => ({ ...b })),
+              vwapFill: DEFAULT_CONFIG.vwapFill,
+              vwapFillOpacity: DEFAULT_CONFIG.vwapFillOpacity,
+              rsiDiv: true,
+              rsiMa: true,
+              rsiMaPeriod: DEFAULT_CONFIG.rsiMaPeriod,
+            } as IndicatorConfig,
+          };
+        }
+        if (version < 3) {
+          migrated = {
+            ...migrated,
+            indicators: {
+              ...migrated.indicators,
+              stoch: true,
+              stochrsi: true,
+              // Matt's TradingView bottom shows the two stochastics, not WaveTrend
+              wavetrend: false,
+            } as ChartState["indicators"],
+            config: {
+              ...migrated.config,
+              stochK: DEFAULT_CONFIG.stochK,
+              stochD: DEFAULT_CONFIG.stochD,
+              stochSmooth: DEFAULT_CONFIG.stochSmooth,
+            } as IndicatorConfig,
+          };
+        }
         // merge() below tolerates a partial shape and fills the rest.
         return migrated as ChartState;
       },
@@ -442,6 +607,27 @@ export const useChartStore = create<ChartState>()(
             ? persistedLines
             : DEFAULT_RIBBON_LINES.map((l) => ({ ...l }));
 
+        // `vwapBandLines` replaced a plain band *count* (`vwapBands`) whose
+        // multipliers were hard-coded 1/2/3/4. Rebuild the equivalent bands from
+        // that count so an old state keeps the bands it was drawing.
+        const persistedBands = p.config?.vwapBandLines;
+        const legacyCount = (p.config as { vwapBands?: number } | undefined)
+          ?.vwapBands;
+        const rawBands: Omit<VwapBand, "color">[] = Array.isArray(persistedBands)
+          ? persistedBands
+          : typeof legacyCount === "number"
+            ? [1, 2, 3, 4]
+                .slice(0, Math.max(0, Math.min(MAX_VWAP_BANDS, legacyCount)))
+                .map((multiplier) => ({ multiplier, enabled: true }))
+            : DEFAULT_VWAP_BANDS.map((b) => ({ ...b }));
+        // Bands persisted before they had their own color fall back to the palette.
+        const vwapBandLines: VwapBand[] = rawBands.map((b, i) => ({
+          ...b,
+          color:
+            (b as Partial<VwapBand>).color ??
+            VWAP_BAND_PALETTE[i % VWAP_BAND_PALETTE.length],
+        }));
+
         // Tokens that were delisted or are commonly added by mistake (HYPERUSDT
         // is Hyperlane, not Hyperliquid — that's HYPEUSDT on Bitget).
         const PURGE = new Set(["MATICUSDT", "HYPERUSDT"]);
@@ -458,7 +644,7 @@ export const useChartStore = create<ChartState>()(
           exchange: p.exchange ?? "binance",
           indicators: { ...current.indicators, ...p.indicators },
           hidden: { ...current.hidden, ...p.hidden },
-          config: { ...current.config, ...p.config, ribbonLines },
+          config: { ...current.config, ...p.config, ribbonLines, vwapBandLines },
           watchlist: [...DEFAULT_WATCHLIST, ...extras],
         };
       },

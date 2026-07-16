@@ -2,12 +2,23 @@ import type { Candle, SymbolInfo, Ticker24h, Timeframe } from "./types";
 
 const BASE = "https://api.binance.com/api/v3";
 
+/**
+ * @param endTime  Unix ms. When set, returns the `limit` candles that closed
+ *                 before it — used to page further back into history.
+ */
 export async function fetchKlines(
   symbol: string,
   interval: Timeframe,
   limit = 1000,
+  endTime?: number,
 ): Promise<Candle[]> {
-  const url = `${BASE}/klines?symbol=${symbol.toUpperCase()}&interval=${interval}&limit=${limit}`;
+  const params = new URLSearchParams({
+    symbol: symbol.toUpperCase(),
+    interval,
+    limit: String(limit),
+  });
+  if (endTime !== undefined) params.set("endTime", String(Math.floor(endTime)));
+  const url = `${BASE}/klines?${params}`;
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`klines ${res.status}`);
   const data = (await res.json()) as unknown[][];

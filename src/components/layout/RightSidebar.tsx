@@ -11,7 +11,7 @@ export function RightSidebar() {
   return (
     <>
       {/* Desktop: static column */}
-      <aside className="hidden w-64 flex-col border-l border-tv-border bg-tv-panel md:flex">
+      <aside className="hidden w-64 shrink-0 flex-col border-l border-tv-border bg-tv-panel md:flex">
         <Watchlist />
       </aside>
 

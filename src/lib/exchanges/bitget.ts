@@ -30,23 +30,62 @@ const GRANULARITY_MAP: Record<Timeframe, string> = {
  * @param symbol  Trading pair, e.g. "BTCUSDT"
  * @param interval  Timeframe string, e.g. "1m", "5m", "1h", "4h", "1d"
  * @param limit  Number of candles to fetch (default 1000, max 1000)
+ * @param endTime  Unix ms. When set, returns the candles before it — Bitget
+ *                 serves those from a separate `history-candles` endpoint.
  * @returns Array of Candle objects with time in unix seconds
  */
 export async function fetchBitgetKlines(
   symbol: string,
   interval: string,
-  limit: number = 1000
+  limit: number = 1000,
+  endTime?: number
 ): Promise<Candle[]> {
   const granularity = GRANULARITY_MAP[interval as Timeframe] ?? interval;
 
+  // Recent bars come from `/candles` (up to 1000 in one go). Older ones live
+  // behind `/history-candles`, which rejects any request over 200 rows — so walk
+  // it backwards in 200-bar pages until we've collected what the caller asked for.
+  if (endTime === undefined) {
+    return fetchBitgetPage(symbol, granularity, Math.min(limit, 1000));
+  }
+
+  const HISTORY_PAGE = 200;
+  const collected: Candle[] = [];
+  let cursor = Math.floor(endTime);
+
+  while (collected.length < limit) {
+    const page = await fetchBitgetPage(
+      symbol,
+      granularity,
+      Math.min(HISTORY_PAGE, limit - collected.length),
+      cursor,
+    );
+    if (page.length === 0) break; // reached the listing date
+    collected.unshift(...page);
+    cursor = page[0].time * 1000 - 1;
+    if (page.length < HISTORY_PAGE) break;
+  }
+
+  return collected;
+}
+
+/** One Bitget candles request, normalized to ascending, de-duplicated bars. */
+async function fetchBitgetPage(
+  symbol: string,
+  granularity: string,
+  limit: number,
+  endTime?: number,
+): Promise<Candle[]> {
   const params = new URLSearchParams({
     symbol,
     productType: "USDT-FUTURES",
     granularity,
-    limit: String(Math.min(limit, 1000)),
+    limit: String(limit),
   });
+  const endpoint = endTime === undefined ? "candles" : "history-candles";
+  if (endTime !== undefined) params.set("endTime", String(endTime));
 
-  const res = await fetch(`${BITGET_BASE}/candles?${params}`);
+  const res = await fetch(`${BITGET_BASE}/${endpoint}?${params}`);
   if (!res.ok) {
     throw new Error(`Bitget klines error: ${res.status} ${res.statusText}`);
   }

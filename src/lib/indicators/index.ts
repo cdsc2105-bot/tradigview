@@ -74,6 +74,102 @@ export function rsi(candles: Candle[], period = 14): IndicatorPoint[] {
   return out;
 }
 
+export type DivergenceKind = "bull" | "hidden_bull" | "bear" | "hidden_bear";
+
+export interface Divergence {
+  time: number;
+  kind: DivergenceKind;
+  /** RSI value at the pivot — where the marker is drawn */
+  value: number;
+}
+
+/**
+ * Regular and hidden RSI divergences, the way TradingView's built-in
+ * "Divergence Indicator" finds them.
+ *
+ * A pivot is a bar whose RSI is the lowest (or highest) of the `left` bars
+ * before and `right` bars after it — so a pivot is only confirmed `right` bars
+ * later, which is why labels appear slightly behind the last candle. Comparing
+ * each pivot with the previous one:
+ *
+ *  - bull:        price lower low,   RSI higher low   → downtrend weakening
+ *  - hidden_bull: price higher low,  RSI lower low    → uptrend continuation
+ *  - bear:        price higher high, RSI lower high   → uptrend weakening
+ *  - hidden_bear: price lower high,  RSI higher high  → downtrend continuation
+ *
+ * Pivots more than `maxBars` apart are too far to relate, and fewer than
+ * `minBars` apart are noise.
+ */
+export function rsiDivergences(
+  candles: Candle[],
+  rsiPoints: IndicatorPoint[],
+  left = 5,
+  right = 5,
+  minBars = 5,
+  maxBars = 60,
+): Divergence[] {
+  const n = rsiPoints.length;
+  if (n < left + right + 2) return [];
+
+  // RSI starts later than the candles, so index by time to read the price at a pivot.
+  const priceByTime = new Map(candles.map((c) => [c.time, c]));
+
+  const isPivot = (i: number, low: boolean): boolean => {
+    if (i < left || i + right >= n) return false;
+    const v = rsiPoints[i].value;
+    for (let j = i - left; j <= i + right; j++) {
+      if (j === i) continue;
+      if (low ? rsiPoints[j].value < v : rsiPoints[j].value > v) return false;
+    }
+    return true;
+  };
+
+  const out: Divergence[] = [];
+  let prevLow: number | null = null;
+  let prevHigh: number | null = null;
+
+  for (let i = 0; i < n; i++) {
+    const candle = priceByTime.get(rsiPoints[i].time);
+    if (!candle) continue;
+
+    if (isPivot(i, true)) {
+      if (prevLow !== null) {
+        const gap = i - prevLow;
+        const prev = priceByTime.get(rsiPoints[prevLow].time);
+        if (prev && gap >= minBars && gap <= maxBars) {
+          const rsiUp = rsiPoints[i].value > rsiPoints[prevLow].value;
+          const priceDown = candle.low < prev.low;
+          if (priceDown && rsiUp) {
+            out.push({ time: candle.time, kind: "bull", value: rsiPoints[i].value });
+          } else if (!priceDown && !rsiUp) {
+            out.push({ time: candle.time, kind: "hidden_bull", value: rsiPoints[i].value });
+          }
+        }
+      }
+      prevLow = i;
+    }
+
+    if (isPivot(i, false)) {
+      if (prevHigh !== null) {
+        const gap = i - prevHigh;
+        const prev = priceByTime.get(rsiPoints[prevHigh].time);
+        if (prev && gap >= minBars && gap <= maxBars) {
+          const rsiDown = rsiPoints[i].value < rsiPoints[prevHigh].value;
+          const priceUp = candle.high > prev.high;
+          if (priceUp && rsiDown) {
+            out.push({ time: candle.time, kind: "bear", value: rsiPoints[i].value });
+          } else if (!priceUp && !rsiDown) {
+            out.push({ time: candle.time, kind: "hidden_bear", value: rsiPoints[i].value });
+          }
+        }
+      }
+      prevHigh = i;
+    }
+  }
+
+  return out;
+}
+
 /**
  * MACD — fast EMA, slow EMA, signal EMA of the MACD line.
  * Defaults: 12 / 26 / 9.
@@ -183,7 +279,8 @@ export function stochastic(
   return out;
 }
 
-function smoothSMA(
+/** SMA over an already-computed indicator series (used for %D, and the RSI's MA). */
+export function smoothSMA(
   data: IndicatorPoint[],
   period: number,
 ): IndicatorPoint[] {
@@ -194,6 +291,47 @@ function smoothSMA(
     sum += data[i].value;
     if (i >= period) sum -= data[i - period].value;
     if (i >= period - 1) out.push({ time: data[i].time, value: sum / period });
+  }
+  return out;
+}
+
+/**
+ * Stochastic RSI — the stochastic oscillator applied to the RSI series instead
+ * of price, as TradingView's built-in (defaults 14, 14, 3, 3). Faster and more
+ * extreme than the plain stochastic; the second pane of the CdeCripto layout.
+ */
+export function stochRsi(
+  candles: Candle[],
+  rsiLen = 14,
+  stochLen = 14,
+  kSmooth = 3,
+  dSmooth = 3,
+): StochPoint[] {
+  const r = rsi(candles, rsiLen);
+  if (r.length < stochLen) return [];
+
+  const rawK: IndicatorPoint[] = [];
+  for (let i = stochLen - 1; i < r.length; i++) {
+    let hi = -Infinity;
+    let lo = Infinity;
+    for (let j = i - stochLen + 1; j <= i; j++) {
+      if (r[j].value > hi) hi = r[j].value;
+      if (r[j].value < lo) lo = r[j].value;
+    }
+    const val = hi === lo ? 50 : ((r[i].value - lo) / (hi - lo)) * 100;
+    rawK.push({ time: r[i].time, value: val });
+  }
+
+  const kLine = smoothSMA(rawK, kSmooth);
+  const dLine = smoothSMA(kLine, dSmooth);
+  const dByTime = new Map(dLine.map((p) => [p.time, p.value]));
+  // Smoothing accumulates float error a hair past the [0,100] bounds — clamp it.
+  const clamp01 = (v: number) => Math.min(100, Math.max(0, v));
+  const out: StochPoint[] = [];
+  for (const p of kLine) {
+    const d = dByTime.get(p.time);
+    if (d !== undefined)
+      out.push({ time: p.time, k: clamp01(p.value), d: clamp01(d) });
   }
   return out;
 }

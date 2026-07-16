@@ -157,8 +157,8 @@ export function Watchlist() {
   };
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-tv-border px-3 py-2">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-between border-b border-tv-border px-3 py-2">
         <h2 className="text-[11px] font-semibold uppercase tracking-wider text-tv-text-muted">
           Watchlist
         </h2>
@@ -171,12 +171,14 @@ export function Watchlist() {
           <Plus className="h-3.5 w-3.5" />
         </button>
       </div>
-      <div className="grid grid-cols-[1fr_auto_auto] gap-2 border-b border-tv-border px-3 py-1.5 text-[10px] uppercase tracking-wider text-tv-text-dim">
+      <div className="grid shrink-0 grid-cols-[1fr_auto_auto] gap-2 border-b border-tv-border px-3 py-1.5 text-[10px] uppercase tracking-wider text-tv-text-dim">
         <span>Símbolo</span>
         <span className="text-right">Precio</span>
         <span className="text-right">24h</span>
       </div>
-      <ScrollArea className="flex-1">
+      {/* min-h-0 is what lets this shrink inside the flex column — without it the
+          list grows past the sidebar and the scrollbar never appears */}
+      <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col">
           {watchlist.length === 0 && (
             <div className="p-4 text-center text-xs text-tv-text-muted">
@@ -188,7 +190,7 @@ export function Watchlist() {
             const loading = supported[section.key] === null;
             return (
               <div key={section.key}>
-                <div className="flex items-center gap-2 bg-tv-bg/40 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-tv-text-dim">
+                <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-tv-border bg-tv-bg px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-tv-text-dim">
                   <span
                     className={cn("inline-flex h-1.5 w-1.5 rounded-full", section.dot)}
                   />

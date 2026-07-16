@@ -32,6 +32,7 @@ const GROUP_ORDER = [
   "Bandas",
   "Tendencia",
   "Volumen",
+  "Sesiones",
 ];
 
 const ENTRIES: Entry[] = [
@@ -120,7 +121,13 @@ const ENTRIES: Entry[] = [
   {
     key: "vwap",
     group: "Volumen",
-    label: (c) => (c.vwapBands > 0 ? `VWAP ±${c.vwapBands}σ` : "VWAP"),
+    label: (c) => {
+      const mults = c.vwapBandLines
+        .filter((b) => b.enabled && b.multiplier > 0)
+        .map((b) => b.multiplier)
+        .sort((a, b) => a - b);
+      return mults.length > 0 ? `VWAP ±${mults.join("/")}σ` : "VWAP";
+    },
     desc: "Precio medio por volumen + bandas de desviación (cloud).",
     keywords: "vwap volumen desviacion bandas cloud precio medio anclado",
   },
@@ -130,6 +137,21 @@ const ENTRIES: Entry[] = [
     label: () => "Volumen",
     desc: "Barras de volumen por vela.",
     keywords: "volumen volume barras",
+  },
+  {
+    key: "stochrsi",
+    group: "Osciladores",
+    label: (c) =>
+      `Estocástico RSI (${c.srsiRsiLen}, ${c.srsiStochLen}, ${c.srsiK}, ${c.srsiD})`,
+    desc: "Estocástico sobre el RSI. El pane rápido del combo de CdeCripto.",
+    keywords: "estocastico rsi stoch stochastic srsi rapido oscilador sobrecompra sobreventa",
+  },
+  {
+    key: "session",
+    group: "Sesiones",
+    label: (c) => `Sesión NY (OPEN ±${c.sessionOffsetMin}m)`,
+    desc: "Líneas verticales en la apertura de Nueva York y ±1h30.",
+    keywords: "sesion session apertura open nueva york new york killzone horario",
   },
 ];
 

@@ -3,28 +3,48 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createChart,
+  createSeriesMarkers,
   CandlestickSeries,
   LineSeries,
   HistogramSeries,
   CrosshairMode,
   type IChartApi,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
   type IPriceLine,
   type LineWidth,
+  type SeriesMarker,
+  type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
 import { fetchKlines } from "@/lib/binance/rest";
 import { fetchBitgetKlines } from "@/lib/exchanges/bitget";
 import { getBinanceWS } from "@/lib/binance/ws";
-import { ema, rsi, macd, bollingerBands, stochastic, superTrend, vwap, waveTrend, ichimoku } from "@/lib/indicators";
+import {
+  ema,
+  rsi,
+  rsiDivergences,
+  smoothSMA,
+  macd,
+  bollingerBands,
+  stochastic,
+  stochRsi,
+  superTrend,
+  vwap,
+  waveTrend,
+  ichimoku,
+} from "@/lib/indicators";
 import type { Candle, Timeframe } from "@/lib/binance/types";
 import {
   INDICATOR_COLORS,
   ICHIMOKU_COLORS,
-  VWAP_BAND_MULTIPLIERS,
+  SESSION_COLORS,
+  STOCH_COLORS,
   useChartStore,
+  type IndicatorConfig,
   type IndicatorKey,
   type RibbonLine,
+  type VwapBand,
 } from "@/lib/store/chart-store";
 import {
   BandFillPrimitive,
@@ -32,6 +52,11 @@ import {
   type FillBand,
   type FillRegion,
 } from "@/components/chart/bandFill";
+import {
+  SessionLinesPrimitive,
+  offsetLabel,
+  sessionLines,
+} from "@/components/chart/sessionLines";
 import { formatPrice, formatVolume } from "@/lib/format";
 import { IndicatorPill } from "./IndicatorPill";
 import { MeasureOverlay } from "./MeasureOverlay";
@@ -62,6 +87,37 @@ interface Props {
   timeframe: Timeframe;
   exchange: "binance" | "bitget";
 }
+
+/** Candles fetched per request, and how far back we let the buffer grow. */
+const PAGE_SIZE = 1000;
+const MAX_CANDLES = 20_000;
+/** Start fetching older candles once the view gets this close to the oldest bar. */
+const HISTORY_TRIGGER_BARS = 50;
+
+/**
+ * Enabled deviation bands, innermost → outermost. Sorted so the shaded regions
+ * nest correctly no matter what order the user typed the multipliers in.
+ */
+function activeVwapBands(cfg: IndicatorConfig): VwapBand[] {
+  return cfg.vwapBandLines
+    .filter((b) => b.enabled && b.multiplier > 0)
+    .sort((a, b) => a.multiplier - b.multiplier);
+}
+
+/** Spanish label for each divergence, as CdeCripto prints them on the RSI. */
+const DIV_LABELS = {
+  bull: "bull",
+  hidden_bull: "hidden_bull",
+  bear: "bear",
+  hidden_bear: "hidden_bear",
+} as const;
+
+const DIV_COLORS = {
+  bull: "#26a69a",
+  hidden_bull: "#b2b5be",
+  bear: "#26c6da",
+  hidden_bear: "#26c6da",
+} as const;
 
 const TV_COLORS = {
   bg: "#131722",
@@ -101,6 +157,8 @@ interface LastValues {
   bbLower?: number;
   stochK?: number;
   stochD?: number;
+  srsiK?: number;
+  srsiD?: number;
   supertrend?: number;
   supertrendDir?: 1 | -1;
   vwapVal?: number;
@@ -127,7 +185,9 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const ema50Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const ema200Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const rsiRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const rsiMaRef = useRef<ISeriesApi<"Line"> | null>(null);
   const rsi30Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const rsi50Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const rsi70Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const macdRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdSignalRef = useRef<ISeriesApi<"Line"> | null>(null);
@@ -139,12 +199,27 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const stochDRef = useRef<ISeriesApi<"Line"> | null>(null);
   const stoch20Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const stoch80Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  /** Purple 20–80 zone behind the stochastic, TradingView-style */
+  const stochFillRef = useRef<BandFillPrimitive | null>(null);
+  const srsiKRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const srsiDRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const srsi20Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const srsi80Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const srsiFillRef = useRef<BandFillPrimitive | null>(null);
   const stBullRef = useRef<ISeriesApi<"Line"> | null>(null);
   const stBearRef = useRef<ISeriesApi<"Line"> | null>(null);
   const vwapRef = useRef<ISeriesApi<"Line"> | null>(null);
   /** Deviation-band line series, ordered upper-innermost…outer then lower-inner…outer */
   const vwapBandRefs = useRef<ISeriesApi<"Line">[]>([]);
   const vwapFillRef = useRef<BandFillPrimitive | null>(null);
+  /** End-of-line dot for the VWAP and each of its band lines */
+  const vwapDotRefs = useRef<Map<ISeriesApi<"Line">, ISeriesMarkersPluginApi<Time>>>(
+    new Map(),
+  );
+  const rsiDivRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const sessionRef = useRef<SessionLinesPrimitive | null>(null);
+  /** Day range + offset the session lines were last built for */
+  const sessionKeyRef = useRef("");
   const wt1Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const wt2Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const wt0Ref = useRef<ISeriesApi<"Line"> | null>(null);
@@ -159,6 +234,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const ichiCloudRef = useRef<BandFillPrimitive | null>(null);
   const candlesRef = useRef<Candle[]>([]);
   const priceLinesMapRef = useRef<Map<string, IPriceLine>>(new Map());
+  /** Set by the data effect; called when the view nears the oldest loaded bar. */
+  const loadMoreRef = useRef<(() => void) | null>(null);
 
   const indicators = useChartStore((s) => s.indicators);
   const hidden = useChartStore((s) => s.hidden);
@@ -185,8 +262,18 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   vwapVisibleRef.current = indicators.vwap && !hidden.vwap;
   const ichiVisibleRef = useRef(false);
   ichiVisibleRef.current = indicators.ichimoku && !hidden.ichimoku;
+  const sessionVisibleRef = useRef(false);
+  sessionVisibleRef.current = indicators.session && !hidden.session;
+  const hiddenRef = useRef(hidden);
+  hiddenRef.current = hidden;
+  const indicatorsVisibleRef = useRef({ stoch: false, stochrsi: false });
+  indicatorsVisibleRef.current = {
+    stoch: indicators.stoch && !hidden.stoch,
+    stochrsi: indicators.stochrsi && !hidden.stochrsi,
+  };
 
   const [hover, setHover] = useState<HoverInfo | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [lastPrice, setLastPrice] = useState<{ value: number; pct: number } | null>(null);
   const [lastValues, setLastValues] = useState<LastValues>({});
   const [paneOffsets, setPaneOffsets] = useState<PaneOffset[]>([]);
@@ -281,6 +368,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     candleSeriesRef.current.attachPrimitive(vwapFillRef.current);
     ichiCloudRef.current = new BandFillPrimitive();
     candleSeriesRef.current.attachPrimitive(ichiCloudRef.current);
+    sessionRef.current = new SessionLinesPrimitive();
+    candleSeriesRef.current.attachPrimitive(sessionRef.current);
 
     chartRef.current = chart;
 
@@ -362,10 +451,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       }
     });
 
-    // Re-render measure overlay on pan / zoom so pixel coords stay in sync
+    // Re-render measure overlay on pan / zoom so pixel coords stay in sync, and
+    // pull in older candles as the view approaches the start of what's loaded.
     const tsRangeHandler = () => setRenderTick((t) => t + 1);
     chart.timeScale().subscribeVisibleTimeRangeChange(tsRangeHandler);
-    const logicalRangeHandler = () => setRenderTick((t) => t + 1);
+    const logicalRangeHandler = (range: { from: number; to: number } | null) => {
+      setRenderTick((t) => t + 1);
+      if (range && range.from < HISTORY_TRIGGER_BARS) loadMoreRef.current?.();
+    };
     chart.timeScale().subscribeVisibleLogicalRangeChange(logicalRangeHandler);
 
     // ResizeObserver — recompute pane offsets when chart container resizes
@@ -397,7 +490,9 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       ichiChikouRef.current = null;
       ichiCloudRef.current = null;
       rsiRef.current = null;
+      rsiMaRef.current = null;
       rsi30Ref.current = null;
+      rsi50Ref.current = null;
       rsi70Ref.current = null;
       macdRef.current = null;
       macdSignalRef.current = null;
@@ -409,11 +504,20 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       stochDRef.current = null;
       stoch20Ref.current = null;
       stoch80Ref.current = null;
+      stochFillRef.current = null;
+      srsiKRef.current = null;
+      srsiDRef.current = null;
+      srsi20Ref.current = null;
+      srsi80Ref.current = null;
+      srsiFillRef.current = null;
       stBullRef.current = null;
       stBearRef.current = null;
       vwapRef.current = null;
       vwapBandRefs.current = [];
       vwapFillRef.current = null;
+      vwapDotRefs.current.clear();
+      rsiDivRef.current = null;
+      sessionRef.current = null;
       wt1Ref.current = null;
       wt2Ref.current = null;
       wt0Ref.current = null;
@@ -470,41 +574,44 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (!chartRef.current) return;
     if (indicators.rsi && !rsiRef.current) {
       const paneIndex = 1;
+      const guide = () =>
+        chartRef.current!.addSeries(
+          LineSeries,
+          {
+            color: TV_COLORS.textMuted,
+            lineWidth: 1,
+            lineStyle: 2,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          },
+          paneIndex,
+        );
       const r = chartRef.current.addSeries(
         LineSeries,
         {
           color: INDICATOR_COLORS.rsi,
           lineWidth: 1,
           priceLineVisible: false,
-          lastValueVisible: false,
+          lastValueVisible: true,
         },
         paneIndex,
       );
-      const r30 = chartRef.current.addSeries(
+      // Gray MA over the RSI, like CdeCripto's panel
+      const rMa = chartRef.current.addSeries(
         LineSeries,
         {
-          color: TV_COLORS.textMuted,
+          color: "#787b86",
           lineWidth: 1,
-          lineStyle: 2,
-          priceLineVisible: false,
-          lastValueVisible: false,
-        },
-        paneIndex,
-      );
-      const r70 = chartRef.current.addSeries(
-        LineSeries,
-        {
-          color: TV_COLORS.textMuted,
-          lineWidth: 1,
-          lineStyle: 2,
           priceLineVisible: false,
           lastValueVisible: false,
         },
         paneIndex,
       );
       rsiRef.current = r;
-      rsi30Ref.current = r30;
-      rsi70Ref.current = r70;
+      rsiMaRef.current = rMa;
+      rsi30Ref.current = guide();
+      rsi50Ref.current = guide();
+      rsi70Ref.current = guide();
       try {
         chartRef.current.panes()[1]?.setStretchFactor(1);
         chartRef.current.panes()[0]?.setStretchFactor(3);
@@ -512,11 +619,16 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       updateRSI();
     } else if (!indicators.rsi && rsiRef.current && chartRef.current) {
       chartRef.current.removeSeries(rsiRef.current);
+      if (rsiMaRef.current) chartRef.current.removeSeries(rsiMaRef.current);
       if (rsi30Ref.current) chartRef.current.removeSeries(rsi30Ref.current);
+      if (rsi50Ref.current) chartRef.current.removeSeries(rsi50Ref.current);
       if (rsi70Ref.current) chartRef.current.removeSeries(rsi70Ref.current);
       rsiRef.current = null;
+      rsiMaRef.current = null;
       rsi30Ref.current = null;
+      rsi50Ref.current = null;
       rsi70Ref.current = null;
+      rsiDivRef.current = null; // its markers plugin died with the series
     }
     requestAnimationFrame(() => recomputePaneOffsets());
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -609,19 +721,19 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [indicators.bb]);
 
-  // Stochastic pane
+  // Stochastic pane — TradingView styling: %K blue, %D orange, purple 20–80 zone
   useEffect(() => {
     if (!chartRef.current) return;
     if (indicators.stoch && !stochKRef.current) {
       const paneIndex = 1 + (indicators.rsi ? 1 : 0) + (indicators.macd ? 1 : 0);
       stochKRef.current = chartRef.current.addSeries(LineSeries, {
-        color: INDICATOR_COLORS.stoch,
+        color: STOCH_COLORS.k,
         lineWidth: 1,
         priceLineVisible: false,
-        lastValueVisible: false,
+        lastValueVisible: true,
       }, paneIndex);
       stochDRef.current = chartRef.current.addSeries(LineSeries, {
-        color: "#ff5722",
+        color: STOCH_COLORS.d,
         lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: false,
@@ -640,6 +752,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         priceLineVisible: false,
         lastValueVisible: false,
       }, paneIndex);
+      stochFillRef.current = new BandFillPrimitive();
+      stochKRef.current.attachPrimitive(stochFillRef.current);
       try {
         chartRef.current.panes()[paneIndex]?.setStretchFactor(1);
         chartRef.current.panes()[0]?.setStretchFactor(3);
@@ -654,10 +768,68 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       stochDRef.current = null;
       stoch20Ref.current = null;
       stoch80Ref.current = null;
+      stochFillRef.current = null;
     }
     requestAnimationFrame(() => recomputePaneOffsets());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [indicators.stoch, indicators.rsi, indicators.macd]);
+
+  // Stochastic RSI pane — same styling, applied to the RSI instead of price
+  useEffect(() => {
+    if (!chartRef.current) return;
+    if (indicators.stochrsi && !srsiKRef.current) {
+      const paneIndex =
+        1 +
+        (indicators.rsi ? 1 : 0) +
+        (indicators.macd ? 1 : 0) +
+        (indicators.stoch ? 1 : 0);
+      srsiKRef.current = chartRef.current.addSeries(LineSeries, {
+        color: STOCH_COLORS.k,
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: true,
+      }, paneIndex);
+      srsiDRef.current = chartRef.current.addSeries(LineSeries, {
+        color: STOCH_COLORS.d,
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      }, paneIndex);
+      srsi20Ref.current = chartRef.current.addSeries(LineSeries, {
+        color: TV_COLORS.textMuted,
+        lineWidth: 1,
+        lineStyle: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      }, paneIndex);
+      srsi80Ref.current = chartRef.current.addSeries(LineSeries, {
+        color: TV_COLORS.textMuted,
+        lineWidth: 1,
+        lineStyle: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      }, paneIndex);
+      srsiFillRef.current = new BandFillPrimitive();
+      srsiKRef.current.attachPrimitive(srsiFillRef.current);
+      try {
+        chartRef.current.panes()[paneIndex]?.setStretchFactor(1);
+        chartRef.current.panes()[0]?.setStretchFactor(3);
+      } catch {}
+      updateStochRsi();
+    } else if (!indicators.stochrsi && srsiKRef.current && chartRef.current) {
+      chartRef.current.removeSeries(srsiKRef.current);
+      if (srsiDRef.current) chartRef.current.removeSeries(srsiDRef.current);
+      if (srsi20Ref.current) chartRef.current.removeSeries(srsi20Ref.current);
+      if (srsi80Ref.current) chartRef.current.removeSeries(srsi80Ref.current);
+      srsiKRef.current = null;
+      srsiDRef.current = null;
+      srsi20Ref.current = null;
+      srsi80Ref.current = null;
+      srsiFillRef.current = null;
+    }
+    requestAnimationFrame(() => recomputePaneOffsets());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indicators.stochrsi, indicators.rsi, indicators.macd, indicators.stoch]);
 
   // SuperTrend — overlay on main pane (two line series: bull and bear)
   useEffect(() => {
@@ -696,11 +868,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         color: config.vwapColor,
         lineWidth: 2,
         priceLineVisible: false,
-        lastValueVisible: false,
+        // The price label on the right axis is what makes each level readable
+        // at a glance, the way CdeCripto shows them.
+        lastValueVisible: true,
       });
     } else if (!indicators.vwap && vwapRef.current) {
       chart.removeSeries(vwapRef.current);
       vwapBandRefs.current.forEach((s) => chart.removeSeries(s));
+      vwapDotRefs.current.clear();
       vwapRef.current = null;
       vwapBandRefs.current = [];
       vwapFillRef.current?.setRegions([], false);
@@ -711,36 +886,42 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     vwapRef.current.applyOptions({ color: config.vwapColor });
 
-    // Two band lines per σ level (upper + lower). Reconcile the pool to 2×count.
-    const wanted = Math.max(0, Math.min(4, config.vwapBands)) * 2;
+    // Two band lines per level (upper + lower). Reconcile the pool to 2×count.
+    const bands = activeVwapBands(config);
     const refs = vwapBandRefs.current;
+    const wanted = bands.length * 2;
     while (refs.length > wanted) {
       const s = refs.pop();
-      if (s) chart.removeSeries(s);
+      if (s) {
+        vwapDotRefs.current.delete(s);
+        chart.removeSeries(s);
+      }
     }
     while (refs.length < wanted) {
       refs.push(
         chart.addSeries(LineSeries, {
-          color: config.vwapBandColor,
           lineWidth: 1,
-          lineStyle: 2,
           priceLineVisible: false,
-          lastValueVisible: false,
+          lastValueVisible: true,
         }),
       );
     }
-    refs.forEach((s) =>
-      s.applyOptions({ color: config.vwapBandColor, visible: !hidden.vwap }),
-    );
+
+    // refs are [upper #1, lower #1, upper #2, …] — both sides of a level share its color.
+    bands.forEach((band, k) => {
+      [refs[k * 2], refs[k * 2 + 1]].forEach((s) =>
+        s?.applyOptions({ color: band.color, visible: !hidden.vwap }),
+      );
+    });
 
     updateVWAP();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     indicators.vwap,
     hidden.vwap,
-    config.vwapBands,
+    config.vwapBandLines,
     config.vwapColor,
-    config.vwapBandColor,
+    config.vwapFillColor,
     config.vwapFill,
     config.vwapFillOpacity,
   ]);
@@ -795,7 +976,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   useEffect(() => {
     if (!chartRef.current) return;
     if (indicators.wavetrend && !wt1Ref.current) {
-      const paneIndex = 1 + (indicators.rsi ? 1 : 0) + (indicators.macd ? 1 : 0) + (indicators.stoch ? 1 : 0);
+      const paneIndex = 1 + (indicators.rsi ? 1 : 0) + (indicators.macd ? 1 : 0) + (indicators.stoch ? 1 : 0) + (indicators.stochrsi ? 1 : 0);
       wt1Ref.current = chartRef.current.addSeries(LineSeries, { color: INDICATOR_COLORS.wavetrend, lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, paneIndex);
       wt2Ref.current = chartRef.current.addSeries(LineSeries, { color: "#ff5722", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, paneIndex);
       wt0Ref.current = chartRef.current.addSeries(LineSeries, { color: TV_COLORS.textMuted, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false }, paneIndex);
@@ -814,7 +995,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     }
     requestAnimationFrame(() => recomputePaneOffsets());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [indicators.wavetrend, indicators.rsi, indicators.macd, indicators.stoch]);
+  }, [indicators.wavetrend, indicators.rsi, indicators.macd, indicators.stoch, indicators.stochrsi]);
 
   // Visibility — eye toggle (hidden state) + enabled state combined
   useEffect(() => {
@@ -822,8 +1003,13 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     ema20Ref.current?.applyOptions({ visible: v("ema20") });
     ema50Ref.current?.applyOptions({ visible: v("ema50") });
     ema200Ref.current?.applyOptions({ visible: v("ema200") });
-    if (rsiRef.current) rsiRef.current.applyOptions({ visible: v("rsi") });
+    if (rsiRef.current) {
+      rsiRef.current.applyOptions({ visible: v("rsi") });
+      updateRSI(); // divergence markers follow the eye toggle
+    }
+    if (rsiMaRef.current) rsiMaRef.current.applyOptions({ visible: v("rsi") });
     if (rsi30Ref.current) rsi30Ref.current.applyOptions({ visible: v("rsi") });
+    if (rsi50Ref.current) rsi50Ref.current.applyOptions({ visible: v("rsi") });
     if (rsi70Ref.current) rsi70Ref.current.applyOptions({ visible: v("rsi") });
     if (macdRef.current) macdRef.current.applyOptions({ visible: v("macd") });
     if (macdSignalRef.current) macdSignalRef.current.applyOptions({ visible: v("macd") });
@@ -833,10 +1019,20 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (bbUpperRef.current) bbUpperRef.current.applyOptions({ visible: v("bb") });
     if (bbMiddleRef.current) bbMiddleRef.current.applyOptions({ visible: v("bb") });
     if (bbLowerRef.current) bbLowerRef.current.applyOptions({ visible: v("bb") });
-    if (stochKRef.current) stochKRef.current.applyOptions({ visible: v("stoch") });
-    if (stochDRef.current) stochDRef.current.applyOptions({ visible: v("stoch") });
-    if (stoch20Ref.current) stoch20Ref.current.applyOptions({ visible: v("stoch") });
-    if (stoch80Ref.current) stoch80Ref.current.applyOptions({ visible: v("stoch") });
+    if (stochKRef.current) {
+      stochKRef.current.applyOptions({ visible: v("stoch") });
+      stochDRef.current?.applyOptions({ visible: v("stoch") });
+      stoch20Ref.current?.applyOptions({ visible: v("stoch") });
+      stoch80Ref.current?.applyOptions({ visible: v("stoch") });
+      updateStoch(); // refresh the purple zone for the new visibility
+    }
+    if (srsiKRef.current) {
+      srsiKRef.current.applyOptions({ visible: v("stochrsi") });
+      srsiDRef.current?.applyOptions({ visible: v("stochrsi") });
+      srsi20Ref.current?.applyOptions({ visible: v("stochrsi") });
+      srsi80Ref.current?.applyOptions({ visible: v("stochrsi") });
+      updateStochRsi();
+    }
     if (stBullRef.current) stBullRef.current.applyOptions({ visible: v("supertrend") });
     if (stBearRef.current) stBearRef.current.applyOptions({ visible: v("supertrend") });
     if (vwapRef.current) {
@@ -906,7 +1102,18 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
   useEffect(() => {
     updateRSI();
-  }, [config.rsi]);
+  }, [
+    config.rsi,
+    config.rsiDiv,
+    config.rsiDivLeft,
+    config.rsiDivRight,
+    config.rsiMa,
+    config.rsiMaPeriod,
+  ]);
+
+  useEffect(() => {
+    updateSessionLines();
+  }, [indicators.session, hidden.session, config.sessionOffsetMin, timeframe]);
 
   useEffect(() => {
     updateMACD();
@@ -919,6 +1126,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   useEffect(() => {
     updateStoch();
   }, [config.stochK, config.stochD, config.stochSmooth]);
+
+  useEffect(() => {
+    updateStochRsi();
+  }, [config.srsiRsiLen, config.srsiStochLen, config.srsiK, config.srsiD]);
 
   useEffect(() => {
     updateSuperTrend();
@@ -1097,22 +1308,89 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     const c = candlesRef.current;
     if (c.length === 0 || !rsiRef.current) return;
     const cfg = configRef.current;
-    const data = rsi(c, cfg.rsi).map((p) => ({
+    const points = rsi(c, cfg.rsi);
+    const data = points.map((p) => ({
       time: p.time as UTCTimestamp,
       value: p.value,
     }));
     rsiRef.current.setData(data);
-    if (rsi30Ref.current && data.length > 0)
-      rsi30Ref.current.setData([
-        { time: data[0].time, value: 30 },
-        { time: data[data.length - 1].time, value: 30 },
-      ]);
-    if (rsi70Ref.current && data.length > 0)
-      rsi70Ref.current.setData([
-        { time: data[0].time, value: 70 },
-        { time: data[data.length - 1].time, value: 70 },
-      ]);
+    updateRSIDivergences(c, points);
+
+    if (rsiMaRef.current) {
+      const ma = cfg.rsiMa ? smoothSMA(points, cfg.rsiMaPeriod) : [];
+      rsiMaRef.current.setData(
+        ma.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })),
+      );
+    }
+
+    if (data.length > 0) {
+      const guide = (series: ISeriesApi<"Line"> | null, level: number) =>
+        series?.setData([
+          { time: data[0].time, value: level },
+          { time: data[data.length - 1].time, value: level },
+        ]);
+      guide(rsi30Ref.current, 30);
+      guide(rsi50Ref.current, 50);
+      guide(rsi70Ref.current, 70);
+    }
     setLastValues((prev) => ({ ...prev, rsi: data.at(-1)?.value }));
+  }
+
+  /** Arrow + label on every RSI pivot that diverges from price. */
+  function updateRSIDivergences(
+    c: Candle[],
+    points: { time: number; value: number }[],
+  ) {
+    const series = rsiRef.current;
+    if (!series) return;
+    const cfg = configRef.current;
+
+    let api = rsiDivRef.current;
+    if (!api) {
+      api = createSeriesMarkers(series, []);
+      rsiDivRef.current = api;
+    }
+
+    if (!cfg.rsiDiv || hiddenRef.current.rsi) {
+      api.setMarkers([]);
+      return;
+    }
+
+    const divs = rsiDivergences(c, points, cfg.rsiDivLeft, cfg.rsiDivRight);
+    const markers: SeriesMarker<Time>[] = divs.map((d) => {
+      const bullish = d.kind === "bull" || d.kind === "hidden_bull";
+      return {
+        time: d.time as UTCTimestamp,
+        position: bullish ? "belowBar" : "aboveBar",
+        shape: bullish ? "arrowUp" : "arrowDown",
+        color: DIV_COLORS[d.kind],
+        text: DIV_LABELS[d.kind],
+      };
+    });
+    api.setMarkers(markers);
+  }
+
+  /** Dashed verticals at the New York open and ±`sessionOffsetMin` around it. */
+  function updateSessionLines() {
+    const prim = sessionRef.current;
+    if (!prim) return;
+    const cfg = configRef.current;
+    if (!sessionVisibleRef.current) {
+      sessionKeyRef.current = "";
+      prim.setLines([], false);
+      return;
+    }
+
+    // The lines only move when the loaded day range changes, so skip the (Intl-heavy)
+    // recompute on every live tick.
+    const c = candlesRef.current;
+    const first = c[0]?.time ?? 0;
+    const last = c[c.length - 1]?.time ?? 0;
+    const key = `${Math.floor(first / 86_400)}:${Math.floor(last / 86_400)}:${cfg.sessionOffsetMin}`;
+    if (key === sessionKeyRef.current) return;
+    sessionKeyRef.current = key;
+
+    prim.setLines(sessionLines(c, cfg.sessionOffsetMin, SESSION_COLORS), true);
   }
 
   function updateMACD() {
@@ -1188,8 +1466,70 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         { time: data[data.length - 1].time as UTCTimestamp, value: 80 },
       ]);
     }
+    updateOscillatorZone(
+      stochFillRef.current,
+      data,
+      indicatorsVisibleRef.current.stoch,
+    );
     const last = data.at(-1);
     setLastValues((prev) => ({ ...prev, stochK: last?.k, stochD: last?.d }));
+  }
+
+  /** Purple 20–80 background zone behind a 0–100 oscillator, TradingView-style. */
+  function updateOscillatorZone(
+    fill: BandFillPrimitive | null,
+    data: { time: number }[],
+    visible: boolean,
+  ) {
+    if (!fill) return;
+    if (!visible || data.length < 2) {
+      fill.setRegions([], false);
+      return;
+    }
+    fill.setRegions(
+      [
+        {
+          bands: [
+            { time: data[0].time as UTCTimestamp, top: 80, bottom: 20 },
+            { time: data[data.length - 1].time as UTCTimestamp, top: 80, bottom: 20 },
+          ],
+          color: hexToRgba(STOCH_COLORS.band, 10),
+        },
+      ],
+      true,
+    );
+  }
+
+  function updateStochRsi() {
+    const c = candlesRef.current;
+    if (c.length === 0 || !srsiKRef.current) return;
+    const cfg = configRef.current;
+    const data = stochRsi(c, cfg.srsiRsiLen, cfg.srsiStochLen, cfg.srsiK, cfg.srsiD);
+    srsiKRef.current.setData(
+      data.map((p) => ({ time: p.time as UTCTimestamp, value: p.k })),
+    );
+    srsiDRef.current?.setData(
+      data.map((p) => ({ time: p.time as UTCTimestamp, value: p.d })),
+    );
+    if (srsi20Ref.current && data.length > 0) {
+      srsi20Ref.current.setData([
+        { time: data[0].time as UTCTimestamp, value: 20 },
+        { time: data[data.length - 1].time as UTCTimestamp, value: 20 },
+      ]);
+    }
+    if (srsi80Ref.current && data.length > 0) {
+      srsi80Ref.current.setData([
+        { time: data[0].time as UTCTimestamp, value: 80 },
+        { time: data[data.length - 1].time as UTCTimestamp, value: 80 },
+      ]);
+    }
+    updateOscillatorZone(
+      srsiFillRef.current,
+      data,
+      indicatorsVisibleRef.current.stochrsi,
+    );
+    const last = data.at(-1);
+    setLastValues((prev) => ({ ...prev, srsiK: last?.k, srsiD: last?.d }));
   }
 
   function updateSuperTrend() {
@@ -1223,48 +1563,80 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       data.map((p) => ({ time: p.time as UTCTimestamp, value: p.vwap })),
     );
 
-    // Bands: refs are laid out [upper σ1, lower σ1, upper σ2, lower σ2, …].
-    const count = Math.max(0, Math.min(4, cfg.vwapBands));
-    for (let k = 0; k < count; k++) {
-      const mult = VWAP_BAND_MULTIPLIERS[k];
-      vwapBandRefs.current[k * 2]?.setData(
+    // Bands: refs are laid out [upper #1, lower #1, upper #2, lower #2, …],
+    // matching the order of the enabled multipliers.
+    const bands = activeVwapBands(cfg);
+    const last = data.at(-1);
+    bands.forEach((band, k) => {
+      const upper = vwapBandRefs.current[k * 2];
+      const lower = vwapBandRefs.current[k * 2 + 1];
+      upper?.setData(
         data.map((p) => ({
           time: p.time as UTCTimestamp,
-          value: p.vwap + mult * p.sd,
+          value: p.vwap + band.multiplier * p.sd,
         })),
       );
-      vwapBandRefs.current[k * 2 + 1]?.setData(
+      lower?.setData(
         data.map((p) => ({
           time: p.time as UTCTimestamp,
-          value: p.vwap - mult * p.sd,
+          value: p.vwap - band.multiplier * p.sd,
         })),
       );
-    }
+      if (last) {
+        setEndDot(upper, last.time, band.color);
+        setEndDot(lower, last.time, band.color);
+      }
+    });
+    if (last) setEndDot(vwapRef.current, last.time, cfg.vwapColor);
 
-    updateVWAPFill(data, count);
-    setLastValues((prev) => ({ ...prev, vwapVal: data.at(-1)?.vwap }));
+    updateVWAPFill(data, bands.map((b) => b.multiplier));
+    setLastValues((prev) => ({ ...prev, vwapVal: last?.vwap }));
   }
 
-  /** Shade each consecutive VWAP band (vwap→σ1, σ1→σ2, …) above and below. */
+  /** Round dot on the last bar of a line, like the ones CdeCripto puts on each level. */
+  function setEndDot(
+    series: ISeriesApi<"Line"> | null | undefined,
+    time: number,
+    color: string,
+  ) {
+    if (!series) return;
+    let api = vwapDotRefs.current.get(series);
+    if (!api) {
+      api = createSeriesMarkers(series, []);
+      vwapDotRefs.current.set(series, api);
+    }
+    api.setMarkers([
+      {
+        time: time as UTCTimestamp,
+        position: "inBar",
+        shape: "circle",
+        color,
+        size: 1,
+      },
+    ]);
+  }
+
+  /** Shade each consecutive VWAP band (vwap→#1, #1→#2, …) above and below. */
   function updateVWAPFill(
     data: { time: number; vwap: number; sd: number }[],
-    count: number,
+    mults: number[],
   ) {
     const fill = vwapFillRef.current;
     if (!fill) return;
 
     const cfg = configRef.current;
+    const count = mults.length;
     const show = vwapVisibleRef.current && cfg.vwapFill && count >= 1;
     if (!show) {
       fill.setRegions([], false);
       return;
     }
 
-    const color = hexToRgba(cfg.vwapBandColor, cfg.vwapFillOpacity);
+    const color = hexToRgba(cfg.vwapFillColor, cfg.vwapFillOpacity);
     const regions: FillRegion[] = [];
 
     // Multiplier levels including the center line (0) as the innermost edge.
-    const levels = [0, ...VWAP_BAND_MULTIPLIERS.slice(0, count)];
+    const levels = [0, ...mults];
     for (let k = 0; k < count; k++) {
       const inner = levels[k];
       const outer = levels[k + 1];
@@ -1392,49 +1764,108 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     setLastValues((prev) => ({ ...prev, wt1: last?.wt1, wt2: last?.wt2 }));
   }
 
+  /** Push `candlesRef` into every series — candles, volume and all indicators. */
+  function redrawAll() {
+    const klines = candlesRef.current;
+    candleSeriesRef.current?.setData(
+      klines.map((k) => ({
+        time: k.time as UTCTimestamp,
+        open: k.open,
+        high: k.high,
+        low: k.low,
+        close: k.close,
+      })),
+    );
+    volumeSeriesRef.current?.setData(
+      klines.map((k) => ({
+        time: k.time as UTCTimestamp,
+        value: k.volume,
+        color: k.close >= k.open ? `${TV_COLORS.green}66` : `${TV_COLORS.red}66`,
+      })),
+    );
+    updateEMAs();
+    updateVolumeMa();
+    updateRibbon();
+    updateRSI();
+    updateMACD();
+    updateBB();
+    updateStoch();
+    updateStochRsi();
+    updateSuperTrend();
+    updateVWAP();
+    updateWaveTrend();
+    updateIchimoku();
+    updateSessionLines();
+  }
+
   // Load historical data + subscribe live
   useEffect(() => {
     let unsub: (() => void) | null = null;
     let cancelled = false;
+    // Paging state for older candles — reset on every symbol/timeframe switch.
+    let fetchingOlder = false;
+    let exhausted = false;
+
+    /**
+     * Prepend the page of candles that precedes the oldest one loaded, so panning
+     * left keeps going instead of stopping at the initial 1000-bar window.
+     */
+    async function loadOlder() {
+      const oldest = candlesRef.current[0];
+      if (
+        cancelled ||
+        fetchingOlder ||
+        exhausted ||
+        !oldest ||
+        candlesRef.current.length >= MAX_CANDLES
+      ) {
+        return;
+      }
+      fetchingOlder = true;
+      setLoadingHistory(true);
+      try {
+        const endTime = oldest.time * 1000 - 1;
+        const page = exchange === "bitget"
+          ? await fetchBitgetKlines(symbol, timeframe, PAGE_SIZE, endTime)
+          : await fetchKlines(symbol, timeframe, PAGE_SIZE, endTime);
+        if (cancelled) return;
+
+        const older = page.filter((c) => c.time < oldest.time);
+        if (older.length === 0) {
+          exhausted = true; // reached the listing date
+          return;
+        }
+
+        // setData reindexes the bars, so the view would jump back by however many
+        // we prepended. Shift the logical range by the same amount to hold it still.
+        const ts = chartRef.current?.timeScale();
+        const before = ts?.getVisibleLogicalRange();
+        candlesRef.current = [...older, ...candlesRef.current];
+        redrawAll();
+        if (ts && before) {
+          ts.setVisibleLogicalRange({
+            from: before.from + older.length,
+            to: before.to + older.length,
+          });
+        }
+      } catch (e) {
+        console.error("Failed to load older candles:", e);
+      } finally {
+        fetchingOlder = false;
+        if (!cancelled) setLoadingHistory(false);
+      }
+    }
+
+    loadMoreRef.current = () => void loadOlder();
 
     async function load() {
       try {
         const klines = exchange === "bitget"
-          ? await fetchBitgetKlines(symbol, timeframe, 1000)
-          : await fetchKlines(symbol, timeframe, 1000);
+          ? await fetchBitgetKlines(symbol, timeframe, PAGE_SIZE)
+          : await fetchKlines(symbol, timeframe, PAGE_SIZE);
         if (cancelled) return;
         candlesRef.current = klines;
-        if (candleSeriesRef.current) {
-          candleSeriesRef.current.setData(
-            klines.map((k) => ({
-              time: k.time as UTCTimestamp,
-              open: k.open,
-              high: k.high,
-              low: k.low,
-              close: k.close,
-            })),
-          );
-        }
-        if (volumeSeriesRef.current) {
-          volumeSeriesRef.current.setData(
-            klines.map((k) => ({
-              time: k.time as UTCTimestamp,
-              value: k.volume,
-              color: k.close >= k.open ? `${TV_COLORS.green}66` : `${TV_COLORS.red}66`,
-            })),
-          );
-        }
-        updateEMAs();
-        updateVolumeMa();
-        updateRibbon();
-        updateRSI();
-        updateMACD();
-        updateBB();
-        updateStoch();
-        updateSuperTrend();
-        updateVWAP();
-        updateWaveTrend();
-        updateIchimoku();
+        redrawAll();
         chartRef.current?.timeScale().fitContent();
         requestAnimationFrame(() => recomputePaneOffsets());
 
@@ -1460,7 +1891,9 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
               arr[arr.length - 1] = k;
             } else if (!lastCandle || k.time > lastCandle.time) {
               arr.push(k);
-              if (arr.length > 2000) arr.shift();
+              // Trim only past the paging cap — a smaller cap would silently drop
+              // the history the user just scrolled back to load.
+              if (arr.length > MAX_CANDLES) arr.shift();
             } else {
               return;
             }
@@ -1485,10 +1918,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             updateMACD();
             updateBB();
             updateStoch();
+            updateStochRsi();
             updateSuperTrend();
             updateVWAP();
             updateWaveTrend();
             updateIchimoku();
+            updateSessionLines();
             const prev = arr[arr.length - 2] ?? lastCandle;
             setLastPrice({
               value: k.close,
@@ -1505,6 +1940,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     return () => {
       cancelled = true;
+      loadMoreRef.current = null;
+      setLoadingHistory(false);
       if (unsub) unsub();
     };
   }, [symbol, timeframe, exchange]);
@@ -1520,7 +1957,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const rsiPaneIdx = 1;
   const macdPaneIdx = indicators.rsi ? 2 : 1;
   const stochPaneIdx = 1 + (indicators.rsi ? 1 : 0) + (indicators.macd ? 1 : 0);
-  const wtPaneIdx = 1 + (indicators.rsi ? 1 : 0) + (indicators.macd ? 1 : 0) + (indicators.stoch ? 1 : 0);
+  const srsiPaneIdx = stochPaneIdx + (indicators.stoch ? 1 : 0);
+  const wtPaneIdx = srsiPaneIdx + (indicators.stochrsi ? 1 : 0);
 
   let measureRender: React.ReactNode = null;
   if (
@@ -1571,6 +2009,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   // Ribbon bias: EMAs stacked fast→slow descending = uptrend, ascending = downtrend,
   // anything else means the EMAs are tangled (no clear trend). Disabled lines
   // report `undefined` and are excluded rather than breaking the read.
+  const vwapMults = activeVwapBands(config).map((b) => b.multiplier);
+
   const ribbonBias = (() => {
     const v = (lastValues.ribbon ?? []).filter(
       (x): x is number => x !== undefined,
@@ -1585,6 +2025,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
       {measureRender}
+
+      {loadingHistory && (
+        <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded border border-tv-border bg-tv-panel/90 px-2 py-1 text-[11px] text-tv-text-muted shadow">
+          Cargando histórico…
+        </div>
+      )}
 
       {/* Top-left of main pane: symbol info + OHLC + Volume pill + EMA pills */}
       <div
@@ -1730,13 +2176,28 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           )}
           {indicators.vwap && (
             <IndicatorPill
-              name={config.vwapBands > 0 ? `VWAP ±${config.vwapBands}σ` : "VWAP"}
+              name={
+                vwapMults.length > 0
+                  ? `VWAP ±${vwapMults.join("/")}σ`
+                  : "VWAP"
+              }
               value={lastValues.vwapVal !== undefined ? formatPrice(lastValues.vwapVal) : undefined}
               color={config.vwapColor}
               hidden={hidden.vwap}
               onToggleHide={() => toggleHidden("vwap")}
               onSettings={() => setSettingsTarget("vwap")}
               onRemove={() => removeIndicator("vwap")}
+            />
+          )}
+          {indicators.session && (
+            <IndicatorPill
+              name="Sesión NY"
+              value={`OPEN ±${offsetLabel(config.sessionOffsetMin)}`}
+              color={SESSION_COLORS.open}
+              hidden={hidden.session}
+              onToggleHide={() => toggleHidden("session")}
+              onSettings={() => setSettingsTarget("session")}
+              onRemove={() => removeIndicator("session")}
             />
           )}
           {indicators.ichimoku && (
@@ -1811,6 +2272,28 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             onToggleHide={() => toggleHidden("stoch")}
             onSettings={() => setSettingsTarget("stoch")}
             onRemove={() => removeIndicator("stoch")}
+          />
+        </div>
+      )}
+
+      {/* Stochastic RSI pane label */}
+      {indicators.stochrsi && paneOffsets[srsiPaneIdx] && (
+        <div
+          style={{ top: paneOffsets[srsiPaneIdx].top + 6, left: 12 }}
+          className="pointer-events-none absolute z-10"
+        >
+          <IndicatorPill
+            name={`Stoch RSI ${config.srsiRsiLen}, ${config.srsiStochLen}, ${config.srsiK}, ${config.srsiD}`}
+            value={
+              lastValues.srsiK !== undefined
+                ? `%K ${lastValues.srsiK.toFixed(1)} / %D ${(lastValues.srsiD ?? 0).toFixed(1)}`
+                : undefined
+            }
+            color={INDICATOR_COLORS.stochrsi}
+            hidden={hidden.stochrsi}
+            onToggleHide={() => toggleHidden("stochrsi")}
+            onSettings={() => setSettingsTarget("stochrsi")}
+            onRemove={() => removeIndicator("stochrsi")}
           />
         </div>
       )}

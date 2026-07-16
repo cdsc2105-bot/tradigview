@@ -15,6 +15,7 @@ import {
   useChartStore,
   DEFAULT_CONFIG,
   MAX_RIBBON_LINES,
+  MAX_VWAP_BANDS,
   type IndicatorKey,
 } from "@/lib/store/chart-store";
 
@@ -32,6 +33,8 @@ const TITLES: Record<IndicatorKey, string> = {
   wavetrend: "WaveTrend",
   ribbon: "Cinta de EMAs",
   ichimoku: "Ichimoku",
+  session: "Sesión de Nueva York",
+  stochrsi: "Estocástico RSI",
 };
 
 export function IndicatorSettingsDialog() {
@@ -100,7 +103,17 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
     if (target === "ema20") onSave({ ema20: clamp(draft.ema20, 2, 500) });
     else if (target === "ema50") onSave({ ema50: clamp(draft.ema50, 2, 500) });
     else if (target === "ema200") onSave({ ema200: clamp(draft.ema200, 2, 500) });
-    else if (target === "rsi") onSave({ rsi: clamp(draft.rsi, 2, 100) });
+    else if (target === "rsi")
+      onSave({
+        rsi: clamp(draft.rsi, 2, 100),
+        rsiDiv: draft.rsiDiv,
+        rsiDivLeft: clamp(draft.rsiDivLeft, 1, 30),
+        rsiDivRight: clamp(draft.rsiDivRight, 1, 30),
+        rsiMa: draft.rsiMa,
+        rsiMaPeriod: clamp(draft.rsiMaPeriod, 2, 100),
+      });
+    else if (target === "session")
+      onSave({ sessionOffsetMin: clamp(draft.sessionOffsetMin, 5, 480) });
     else if (target === "macd")
       onSave({
         macdFast: clamp(draft.macdFast, 2, 100),
@@ -117,6 +130,13 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
         stochK: clamp(draft.stochK, 2, 100),
         stochD: clamp(draft.stochD, 2, 100),
         stochSmooth: clamp(draft.stochSmooth, 1, 50),
+      });
+    else if (target === "stochrsi")
+      onSave({
+        srsiRsiLen: clamp(draft.srsiRsiLen, 2, 100),
+        srsiStochLen: clamp(draft.srsiStochLen, 2, 100),
+        srsiK: clamp(draft.srsiK, 1, 50),
+        srsiD: clamp(draft.srsiD, 1, 50),
       });
     else if (target === "supertrend")
       onSave({
@@ -154,11 +174,84 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
         />
       )}
       {target === "rsi" && (
-        <Field
-          label="Período"
-          value={draft.rsi}
-          onChange={(n) => setDraft((d) => ({ ...d, rsi: n }))}
-        />
+        <>
+          <Field
+            label="Período"
+            value={draft.rsi}
+            onChange={(n) => setDraft((d) => ({ ...d, rsi: n }))}
+          />
+
+          <div className="flex flex-col gap-2 border-t border-tv-border pt-3">
+            <label className="flex items-center gap-2 text-xs text-tv-text">
+              <input
+                type="checkbox"
+                checked={draft.rsiMa}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, rsiMa: e.target.checked }))
+                }
+                className="h-3.5 w-3.5 accent-tv-blue"
+              />
+              Media móvil del RSI (línea gris)
+            </label>
+            {draft.rsiMa && (
+              <Field
+                label="Período de la media"
+                value={draft.rsiMaPeriod}
+                onChange={(n) => setDraft((d) => ({ ...d, rsiMaPeriod: n }))}
+              />
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2 border-t border-tv-border pt-3">
+            <label className="flex items-center gap-2 text-xs text-tv-text">
+              <input
+                type="checkbox"
+                checked={draft.rsiDiv}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, rsiDiv: e.target.checked }))
+                }
+                className="h-3.5 w-3.5 accent-tv-blue"
+              />
+              Marcar divergencias (bull / bear / hidden)
+            </label>
+
+            {draft.rsiDiv && (
+              <div className="grid grid-cols-2 gap-2">
+                <Field
+                  label="Pivote izq."
+                  value={draft.rsiDivLeft}
+                  onChange={(n) => setDraft((d) => ({ ...d, rsiDivLeft: n }))}
+                />
+                <Field
+                  label="Pivote der."
+                  value={draft.rsiDivRight}
+                  onChange={(n) => setDraft((d) => ({ ...d, rsiDivRight: n }))}
+                />
+              </div>
+            )}
+          </div>
+
+          <p className="text-xs text-tv-text-muted">
+            Un pivote solo se confirma cuando pasan los bares de la derecha, así
+            que la etiqueta aparece unas velas por detrás — igual que en
+            TradingView. Divergencia regular = posible giro; oculta = probable
+            continuación.
+          </p>
+        </>
+      )}
+      {target === "session" && (
+        <>
+          <Field
+            label="Minutos antes / después de la apertura"
+            value={draft.sessionOffsetMin}
+            onChange={(n) => setDraft((d) => ({ ...d, sessionOffsetMin: n }))}
+          />
+          <p className="text-xs text-tv-text-muted">
+            Marca la apertura de Nueva York (09:30 hora de NY, con horario de
+            verano incluido) y las líneas de ±{draft.sessionOffsetMin} minutos.
+            Solo se dibujan en temporalidades intradía.
+          </p>
+        </>
       )}
       {target === "macd" && (
         <div className="grid grid-cols-3 gap-2">
@@ -211,6 +304,37 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
             onChange={(n) => setDraft((d) => ({ ...d, stochSmooth: n }))}
           />
         </div>
+      )}
+      {target === "stochrsi" && (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <Field
+              label="Longitud RSI"
+              value={draft.srsiRsiLen}
+              onChange={(n) => setDraft((d) => ({ ...d, srsiRsiLen: n }))}
+            />
+            <Field
+              label="Longitud Estocástico"
+              value={draft.srsiStochLen}
+              onChange={(n) => setDraft((d) => ({ ...d, srsiStochLen: n }))}
+            />
+            <Field
+              label="Suavizado %K"
+              value={draft.srsiK}
+              onChange={(n) => setDraft((d) => ({ ...d, srsiK: n }))}
+            />
+            <Field
+              label="Suavizado %D"
+              value={draft.srsiD}
+              onChange={(n) => setDraft((d) => ({ ...d, srsiD: n }))}
+            />
+          </div>
+          <p className="text-xs text-tv-text-muted">
+            El estocástico aplicado sobre el RSI (14, 14, 3, 3 como en
+            TradingView). Más rápido y extremo que el estocástico normal: bueno
+            para cronometrar entradas dentro de la tendencia.
+          </p>
+        </>
       )}
       {target === "supertrend" && (
         <div className="grid grid-cols-2 gap-2">
@@ -463,7 +587,13 @@ function RibbonEditor() {
 function VwapEditor() {
   const config = useChartStore((s) => s.config);
   const setConfig = useChartStore((s) => s.setConfig);
+  const setVwapBand = useChartStore((s) => s.setVwapBand);
+  const addVwapBand = useChartStore((s) => s.addVwapBand);
+  const removeVwapBand = useChartStore((s) => s.removeVwapBand);
+  const resetVwap = useChartStore((s) => s.resetVwap);
   const setTarget = useChartStore((s) => s.setSettingsTarget);
+
+  const bands = config.vwapBandLines;
 
   return (
     <div className="flex flex-col gap-3">
@@ -482,34 +612,86 @@ function VwapEditor() {
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
-            Color bandas
+            Color relleno
           </span>
           <input
             type="color"
-            value={config.vwapBandColor}
-            onChange={(e) => setConfig({ vwapBandColor: e.target.value })}
-            aria-label="Color de las bandas de desviación"
+            value={config.vwapFillColor}
+            onChange={(e) => setConfig({ vwapFillColor: e.target.value })}
+            aria-label="Color del sombreado entre bandas"
             className="h-8 w-full cursor-pointer rounded border border-tv-border bg-tv-bg p-0.5"
           />
         </label>
       </div>
 
-      <label className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1.5 border-t border-tv-border pt-3">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
-          Bandas de desviación (σ)
+          Multiplicadores de bandas (desviación estándar)
         </span>
-        <select
-          value={config.vwapBands}
-          onChange={(e) => setConfig({ vwapBands: parseInt(e.target.value, 10) })}
-          className="h-8 rounded border border-tv-border bg-tv-bg px-1.5 text-xs text-tv-text"
+
+        {bands.length === 0 && (
+          <p className="text-xs text-tv-text-muted">
+            Sin bandas — solo se dibuja la línea VWAP.
+          </p>
+        )}
+
+        {bands.map((band, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={band.enabled}
+              onChange={(e) => setVwapBand(i, { enabled: e.target.checked })}
+              aria-label={`Activar banda #${i + 1}`}
+              className="h-3.5 w-3.5 accent-tv-blue"
+            />
+            <span className="w-20 shrink-0 text-xs text-tv-text">
+              Banda #{i + 1}
+            </span>
+            <Input
+              type="number"
+              min={0.1}
+              max={10}
+              step={0.1}
+              value={band.multiplier}
+              onChange={(e) => {
+                const n = parseFloat(e.target.value);
+                if (!isNaN(n)) setVwapBand(i, { multiplier: clamp(n, 0.1, 10) });
+              }}
+              aria-label={`Multiplicador de la banda #${i + 1}`}
+              className={cn(
+                "h-8 flex-1 bg-tv-bg tabular-nums",
+                !band.enabled && "opacity-50",
+              )}
+            />
+            <input
+              type="color"
+              value={band.color}
+              onChange={(e) => setVwapBand(i, { color: e.target.value })}
+              aria-label={`Color de la banda #${i + 1}`}
+              className="h-8 w-8 shrink-0 cursor-pointer rounded border border-tv-border bg-tv-bg p-0.5"
+            />
+            <button
+              onClick={() => removeVwapBand(i)}
+              title="Quitar esta banda"
+              aria-label={`Quitar banda #${i + 1}`}
+              className="rounded p-1 text-tv-text-muted hover:bg-tv-bg hover:text-tv-red"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={addVwapBand}
+          disabled={bands.length >= MAX_VWAP_BANDS}
+          className="justify-start gap-1.5 text-tv-text-muted hover:text-tv-text disabled:opacity-40"
         >
-          <option value={0}>Sin bandas (solo VWAP)</option>
-          <option value={1}>1σ</option>
-          <option value={2}>1σ, 2σ</option>
-          <option value={3}>1σ, 2σ, 3σ</option>
-          <option value={4}>1σ, 2σ, 3σ, 4σ</option>
-        </select>
-      </label>
+          <Plus className="h-3.5 w-3.5" />
+          Agregar banda ({bands.length}/{MAX_VWAP_BANDS})
+        </Button>
+      </div>
 
       <div className="flex flex-col gap-2 border-t border-tv-border pt-3">
         <label className="flex items-center gap-2 text-xs text-tv-text">
@@ -543,12 +725,21 @@ function VwapEditor() {
       </div>
 
       <p className="text-xs text-tv-text-muted">
-        El VWAP se resetea al inicio de cada día UTC. Las bandas son desviaciones
-        estándar ponderadas por volumen: el precio tiende a volver hacia el VWAP,
-        y las bandas externas (2σ–3σ) marcan zonas de sobre-extensión.
+        El VWAP se resetea al inicio de cada día UTC. Cada banda se dibuja arriba
+        y abajo a multiplicador × desviación estándar ponderada por volumen: con
+        el multiplicador en 1 tienes la banda de 1σ, la que suele actuar de zona
+        de retroceso; las externas marcan sobre-extensión.
       </p>
 
-      <div className="mt-1 flex justify-end">
+      <div className="mt-1 flex items-center justify-between">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={resetVwap}
+          className="text-tv-text-muted hover:text-tv-text"
+        >
+          Reset VWAP
+        </Button>
         <Button
           size="sm"
           onClick={() => setTarget(null)}
