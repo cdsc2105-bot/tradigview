@@ -19,7 +19,8 @@ import {
 } from "lightweight-charts";
 import { fetchKlines } from "@/lib/binance/rest";
 import { fetchBitgetKlines } from "@/lib/exchanges/bitget";
-import { getBinanceWS } from "@/lib/binance/ws";
+import { fetchFuturesKlines } from "@/lib/exchanges/binance-futures";
+import { getBinanceWS, getBinanceFuturesWS } from "@/lib/binance/ws";
 import {
   ema,
   rsi,
@@ -36,12 +37,14 @@ import {
 } from "@/lib/indicators";
 import type { Candle, Timeframe } from "@/lib/binance/types";
 import {
+  EXCHANGE_LABELS,
   INDICATOR_COLORS,
   ICHIMOKU_COLORS,
   RSI_COLORS,
   SESSION_COLORS,
   STOCH_COLORS,
   useChartStore,
+  type Exchange,
   type IndicatorConfig,
   type IndicatorKey,
   type RibbonLine,
@@ -87,8 +90,18 @@ function durationLabel(aTime: number, bTime: number): string {
 interface Props {
   symbol: string;
   timeframe: Timeframe;
-  exchange: "binance" | "bitget";
+  exchange: Exchange;
 }
+
+/** Candle fetcher per venue — all share the (symbol, tf, limit, endTime) shape. */
+const KLINE_FETCHERS: Record<
+  Exchange,
+  (s: string, tf: Timeframe, limit: number, endTime?: number) => Promise<Candle[]>
+> = {
+  binance: fetchKlines,
+  binancef: fetchFuturesKlines,
+  bitget: fetchBitgetKlines,
+};
 
 /** Candles fetched per request, and how far back we let the buffer grow. */
 const PAGE_SIZE = 1000;
@@ -248,8 +261,11 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const hidden = useChartStore((s) => s.hidden);
   const config = useChartStore((s) => s.config);
   const tool = useChartStore((s) => s.tool);
+  const setTool = useChartStore((s) => s.setTool);
   const priceLines = useChartStore((s) => s.priceLines);
+  const trendLines = useChartStore((s) => s.trendLines);
   const addPriceLine = useChartStore((s) => s.addPriceLine);
+  const addTrendLine = useChartStore((s) => s.addTrendLine);
   const removeIndicator = useChartStore((s) => s.removeIndicator);
   const toggleHidden = useChartStore((s) => s.toggleHidden);
   const setSettingsTarget = useChartStore((s) => s.setSettingsTarget);
@@ -257,8 +273,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   // Refs to avoid recreating subscribeClick on every tool change
   const toolRef = useRef(tool);
   toolRef.current = tool;
+  const setToolRef = useRef(setTool);
+  setToolRef.current = setTool;
   const addPriceLineRef = useRef(addPriceLine);
   addPriceLineRef.current = addPriceLine;
+  const addTrendLineRef = useRef(addTrendLine);
+  addTrendLineRef.current = addTrendLine;
   const symbolRef = useRef(symbol);
   symbolRef.current = symbol;
   const configRef = useRef(config);
@@ -288,6 +308,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const [renderTick, setRenderTick] = useState(0);
   const measureRef = useRef(measure);
   measureRef.current = measure;
+  /** Trend line being placed (first click done, second pending) */
+  const [trendDraft, setTrendDraft] = useState<MeasureState>(INITIAL_MEASURE);
+  const trendDraftRef = useRef(trendDraft);
+  trendDraftRef.current = trendDraft;
+  /** User-drawn trend lines, painted on the candles pane */
+  const trendSegRef = useRef<SegmentsPrimitive | null>(null);
 
   // Helper — compute pane top offsets from chart layout
   function recomputePaneOffsets() {
@@ -377,6 +403,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     candleSeriesRef.current.attachPrimitive(ichiCloudRef.current);
     sessionRef.current = new SessionLinesPrimitive();
     candleSeriesRef.current.attachPrimitive(sessionRef.current);
+    trendSegRef.current = new SegmentsPrimitive();
+    candleSeriesRef.current.attachPrimitive(trendSegRef.current);
 
     chartRef.current = chart;
 
@@ -388,6 +416,30 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
       if (toolRef.current === "hline") {
         addPriceLineRef.current(price, symbolRef.current);
+        return;
+      }
+
+      if (toolRef.current === "trend") {
+        if (!param.time) return;
+        const time = Number(param.time);
+        const current = trendDraftRef.current;
+        if (current.phase === "idle") {
+          setTrendDraft({
+            phase: "placing",
+            a: { time, price },
+            b: { time, price },
+          });
+        } else if (current.phase === "placing" && current.a) {
+          addTrendLineRef.current({
+            symbol: symbolRef.current,
+            t1: current.a.time,
+            p1: current.a.price,
+            t2: time,
+            p2: price,
+          });
+          setTrendDraft(INITIAL_MEASURE);
+          setToolRef.current("cursor"); // back to navigation, like TradingView
+        }
         return;
       }
 
@@ -430,6 +482,23 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         if (price !== null && isFinite(price)) {
           const time = Number(param.time);
           setMeasure((prev) =>
+            prev.phase === "placing" ? { ...prev, b: { time, price } } : prev,
+          );
+        }
+      }
+
+      // Trend line preview follows the crosshair between the two clicks
+      if (
+        toolRef.current === "trend" &&
+        trendDraftRef.current.phase === "placing" &&
+        param.point &&
+        param.time &&
+        candleSeriesRef.current
+      ) {
+        const price = candleSeriesRef.current.coordinateToPrice(param.point.y);
+        if (price !== null && isFinite(price)) {
+          const time = Number(param.time);
+          setTrendDraft((prev) =>
             prev.phase === "placing" ? { ...prev, b: { time, price } } : prev,
           );
         }
@@ -527,6 +596,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       vwapDotRefs.current.clear();
       rsiDivRef.current = null;
       sessionRef.current = null;
+      trendSegRef.current = null;
       wt1Ref.current = null;
       wt2Ref.current = null;
       wt0Ref.current = null;
@@ -1187,14 +1257,55 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     }
   }, [priceLines, symbol]);
 
-  // Cursor style when drawing tools are active + reset measure on tool change
+  // Cursor style when drawing tools are active + reset drafts on tool change
   useEffect(() => {
     if (containerRef.current) {
       containerRef.current.style.cursor =
-        tool === "hline" || tool === "measure" ? "crosshair" : "";
+        tool === "hline" || tool === "measure" || tool === "trend"
+          ? "crosshair"
+          : "";
     }
     if (tool !== "measure") setMeasure(INITIAL_MEASURE);
+    if (tool !== "trend") setTrendDraft(INITIAL_MEASURE);
   }, [tool]);
+
+  // Escape cancels whatever is being drawn and returns to the cursor
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setMeasure(INITIAL_MEASURE);
+      setTrendDraft(INITIAL_MEASURE);
+      if (toolRef.current !== "cursor") setToolRef.current("cursor");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Paint the symbol's trend lines (plus the one being placed, dashed)
+  useEffect(() => {
+    const prim = trendSegRef.current;
+    if (!prim) return;
+    const segs: Segment[] = trendLines
+      .filter((t) => t.symbol === symbol)
+      .map((t) => ({
+        t1: t.t1 as UTCTimestamp,
+        v1: t.p1,
+        t2: t.t2 as UTCTimestamp,
+        v2: t.p2,
+        color: TV_COLORS.blue,
+      }));
+    if (trendDraft.phase === "placing" && trendDraft.a && trendDraft.b) {
+      segs.push({
+        t1: trendDraft.a.time as UTCTimestamp,
+        v1: trendDraft.a.price,
+        t2: trendDraft.b.time as UTCTimestamp,
+        v2: trendDraft.b.price,
+        color: TV_COLORS.blue,
+        dashed: true,
+      });
+    }
+    prim.setSegments(segs, segs.length > 0);
+  }, [trendLines, symbol, trendDraft]);
 
   /** 21-period SMA of volume, drawn as a line over the volume histogram. */
   function updateVolumeMa() {
@@ -1873,9 +1984,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       setLoadingHistory(true);
       try {
         const endTime = oldest.time * 1000 - 1;
-        const page = exchange === "bitget"
-          ? await fetchBitgetKlines(symbol, timeframe, PAGE_SIZE, endTime)
-          : await fetchKlines(symbol, timeframe, PAGE_SIZE, endTime);
+        const page = await KLINE_FETCHERS[exchange](symbol, timeframe, PAGE_SIZE, endTime);
         if (cancelled) return;
 
         const older = page.filter((c) => c.time < oldest.time);
@@ -1908,9 +2017,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     async function load() {
       try {
-        const klines = exchange === "bitget"
-          ? await fetchBitgetKlines(symbol, timeframe, PAGE_SIZE)
-          : await fetchKlines(symbol, timeframe, PAGE_SIZE);
+        const klines = await KLINE_FETCHERS[exchange](symbol, timeframe, PAGE_SIZE);
         if (cancelled) return;
         candlesRef.current = klines;
         redrawAll();
@@ -1926,8 +2033,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           });
         }
 
-        if (exchange !== "binance") return;
-        const ws = getBinanceWS();
+        // Live candles via WebSocket — spot and futures share the protocol;
+        // Bitget has no public multiplexed kline stream, so it stays REST-only.
+        if (exchange === "bitget") return;
+        const ws = exchange === "binancef" ? getBinanceFuturesWS() : getBinanceWS();
         unsub = ws.subscribeKline({
           symbol,
           interval: timeframe,
@@ -2092,7 +2201,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             <span className="text-tv-text-muted">·</span>
             <span className="uppercase text-tv-text-muted">{timeframe}</span>
             <span className="text-tv-text-muted">·</span>
-            <span className="text-tv-text-muted">{exchange === "bitget" ? "Bitget Perp" : "Binance"}</span>
+            <span className="text-tv-text-muted">{EXCHANGE_LABELS[exchange]}</span>
           </div>
           {hover && (
             <div className="flex items-center gap-x-3 text-[11px]">

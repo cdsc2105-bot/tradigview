@@ -1,5 +1,6 @@
 import { fetchExchangeSymbols } from "@/lib/binance/rest";
 import { fetchBitgetSymbols } from "@/lib/exchanges/bitget";
+import { fetchFuturesSymbols } from "@/lib/exchanges/binance-futures";
 import type { Exchange } from "@/lib/store/chart-store";
 
 /**
@@ -21,7 +22,9 @@ export async function fetchSupportedSymbols(
   const symbols =
     exchange === "binance"
       ? (await fetchExchangeSymbols()).map((s) => s.symbol)
-      : await fetchBitgetSymbols();
+      : exchange === "binancef"
+        ? await fetchFuturesSymbols()
+        : await fetchBitgetSymbols();
 
   const set = new Set(symbols.map((s) => s.toUpperCase()));
   cache[exchange] = set;

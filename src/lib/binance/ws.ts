@@ -1,6 +1,8 @@
 import type { Candle, Timeframe } from "./types";
 
-const WS_BASE = "wss://stream.binance.com:9443/stream";
+const WS_SPOT = "wss://stream.binance.com:9443/stream";
+/** Binance USDT-M futures use a separate host with the same stream protocol. */
+const WS_FUTURES = "wss://fstream.binance.com/stream";
 
 interface KlineMsg {
   stream: string;
@@ -65,9 +67,11 @@ export class BinanceWS {
   private connected = false;
   private closing = false;
 
+  constructor(private readonly url: string = WS_SPOT) {}
+
   connect() {
     if (this.ws || this.closing) return;
-    this.ws = new WebSocket(WS_BASE);
+    this.ws = new WebSocket(this.url);
 
     this.ws.onopen = () => {
       this.connected = true;
@@ -177,16 +181,28 @@ export class BinanceWS {
   }
 }
 
-// Singleton — only one WS connection per browser tab
-let singleton: BinanceWS | null = null;
+// Singletons — one WS connection per venue per browser tab
+let spotSingleton: BinanceWS | null = null;
 export function getBinanceWS(): BinanceWS {
   if (typeof window === "undefined") {
     // SSR safety: dummy
     return new BinanceWS();
   }
-  if (!singleton) {
-    singleton = new BinanceWS();
-    singleton.connect();
+  if (!spotSingleton) {
+    spotSingleton = new BinanceWS(WS_SPOT);
+    spotSingleton.connect();
   }
-  return singleton;
+  return spotSingleton;
+}
+
+let futuresSingleton: BinanceWS | null = null;
+export function getBinanceFuturesWS(): BinanceWS {
+  if (typeof window === "undefined") {
+    return new BinanceWS(WS_FUTURES);
+  }
+  if (!futuresSingleton) {
+    futuresSingleton = new BinanceWS(WS_FUTURES);
+    futuresSingleton.connect();
+  }
+  return futuresSingleton;
 }

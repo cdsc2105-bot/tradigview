@@ -16,9 +16,9 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TradingView Gratis — Crypto charts open source",
+  title: "TradingView — Gráficos cripto en vivo",
   description:
-    "Plataforma de charts crypto en vivo. Alternativa gratis a TradingView. Powered by Binance + lightweight-charts.",
+    "Plataforma de charts crypto en vivo. Binance spot y perpetuos, Bitget perpetuos + lightweight-charts.",
 };
 
 // Lock the viewport to device width and prevent double-tap zoom so the chart

@@ -18,7 +18,7 @@ export function Header() {
           <Zap className="h-4 w-4 text-tv-blue" />
         </div>
         <span className="hidden text-sm font-semibold text-tv-text sm:inline">
-          TradingView <span className="text-tv-text-muted">Gratis</span>
+          TradingView
         </span>
       </div>
 

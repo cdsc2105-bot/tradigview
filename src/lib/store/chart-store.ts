@@ -4,7 +4,14 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Timeframe } from "@/lib/binance/types";
 
-export type Exchange = "binance" | "bitget";
+export type Exchange = "binance" | "binancef" | "bitget";
+
+/** Display names — "binancef" is Binance's USDT-M perpetual futures. */
+export const EXCHANGE_LABELS: Record<Exchange, string> = {
+  binance: "Binance",
+  binancef: "Binance Perp",
+  bitget: "Bitget Perp",
+};
 
 export type IndicatorKey =
   | "ema20"
@@ -23,12 +30,22 @@ export type IndicatorKey =
   | "session"
   | "stochrsi";
 
-export type DrawingTool = "cursor" | "hline" | "measure" | "eraser";
+export type DrawingTool = "cursor" | "hline" | "trend" | "measure" | "eraser";
 
 export interface PriceLine {
   id: string;
   symbol: string;
   price: number;
+}
+
+/** A user-drawn trend line between two chart points, kept per symbol. */
+export interface TrendLine {
+  id: string;
+  symbol: string;
+  t1: number;
+  p1: number;
+  t2: number;
+  p2: number;
 }
 
 export interface IndicatorConfig {
@@ -321,6 +338,7 @@ interface ChartState {
   // Ephemeral UI state (not persisted)
   tool: DrawingTool;
   priceLines: PriceLine[];
+  trendLines: TrendLine[];
   symbolDialogOpen: boolean;
   /** Watchlist drawer open (mobile only; desktop shows it inline) */
   watchlistOpen: boolean;
@@ -347,6 +365,8 @@ interface ChartState {
   removeFromWatchlist: (s: string) => void;
   setTool: (t: DrawingTool) => void;
   addPriceLine: (price: number, symbol: string) => void;
+  addTrendLine: (line: Omit<TrendLine, "id">) => void;
+  /** Clears price lines AND trend lines for the symbol (or all) */
   clearPriceLines: (symbol?: string) => void;
   setSymbolDialogOpen: (v: boolean) => void;
   setWatchlistOpen: (v: boolean) => void;
@@ -401,6 +421,7 @@ export const useChartStore = create<ChartState>()(
       watchlist: DEFAULT_WATCHLIST,
       tool: "cursor",
       priceLines: [],
+      trendLines: [],
       symbolDialogOpen: false,
       watchlistOpen: false,
       settingsTarget: null,
@@ -538,10 +559,26 @@ export const useChartStore = create<ChartState>()(
             },
           ],
         })),
+      addTrendLine: (line) =>
+        set((state) => ({
+          trendLines: [
+            ...state.trendLines,
+            {
+              ...line,
+              id:
+                typeof crypto !== "undefined" && "randomUUID" in crypto
+                  ? crypto.randomUUID()
+                  : `${Date.now()}-${Math.random()}`,
+            },
+          ],
+        })),
       clearPriceLines: (symbol) =>
         set((state) => ({
           priceLines: symbol
             ? state.priceLines.filter((p) => p.symbol !== symbol)
+            : [],
+          trendLines: symbol
+            ? state.trendLines.filter((t) => t.symbol !== symbol)
             : [],
         })),
       setSymbolDialogOpen: (symbolDialogOpen) => set({ symbolDialogOpen }),

@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 
 const TABS: { key: Exchange; label: string }[] = [
   { key: "binance", label: "Binance" },
+  { key: "binancef", label: "Binance Perp" },
   { key: "bitget", label: "Bitget Perp" },
 ];
 
@@ -179,7 +180,7 @@ export function SymbolSelector() {
                   <span className="text-tv-text-muted">/ {s.quoteAsset}</span>
                 </div>
                 <span className="text-[10px] text-tv-text-dim">
-                  {tab === "bitget" ? "Bitget" : "Binance"}
+                  {TABS.find((t) => t.key === tab)?.label}
                 </span>
               </button>
             ))}

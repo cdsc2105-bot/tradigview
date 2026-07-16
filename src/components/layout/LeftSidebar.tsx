@@ -1,6 +1,6 @@
 "use client";
 
-import { MousePointer2, Minus, Ruler, Trash2, Lock } from "lucide-react";
+import { MousePointer2, Minus, Ruler, Trash2, TrendingUp, Lock } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChartStore, type DrawingTool } from "@/lib/store/chart-store";
 import { cn } from "@/lib/utils";
@@ -21,18 +21,20 @@ const TOOLS: ToolDef[] = [
     hint: "Click en el chart para marcar un precio",
   },
   {
+    key: "trend",
+    icon: TrendingUp,
+    label: "Línea de tendencia",
+    hint: "Click en dos puntos para trazar la recta · Esc cancela",
+  },
+  {
     key: "measure",
     icon: Ruler,
     label: "Regla / Medir",
-    hint: "Click en dos puntos para medir Δ precio, %, barras y volumen",
+    hint: "Click en dos puntos para medir Δ precio, %, barras y volumen · Esc cancela",
   },
 ];
 
-const LOCKED = [
-  { label: "Línea de tendencia" },
-  { label: "Fibonacci" },
-  { label: "Texto" },
-];
+const LOCKED = [{ label: "Fibonacci" }, { label: "Texto" }];
 
 export function LeftSidebar() {
   const tool = useChartStore((s) => s.tool);
