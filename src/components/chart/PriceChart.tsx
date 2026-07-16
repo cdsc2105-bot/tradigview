@@ -1453,15 +1453,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       );
     }
 
-    // Purple 30–70 zone, TV's default RSI background
-    updateOscillatorZone(
-      rsiFillRef.current,
-      data,
-      !hiddenRef.current.rsi,
-      70,
-      30,
-      RSI_COLORS.band,
-    );
+    updateRSIZones(data);
 
     if (data.length > 0) {
       const guide = (series: ISeriesApi<"Line"> | null, level: number) =>
@@ -1474,6 +1466,54 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       guide(rsi70Ref.current, 70);
     }
     setLastValues((prev) => ({ ...prev, rsi: data.at(-1)?.value }));
+  }
+
+  /**
+   * RSI background like Matt's pane: red zone above 70, purple 30–70, green
+   * below 30 — plus a stronger fill between the RSI line and the band edge
+   * while it's overbought/oversold, so the extremes pop.
+   */
+  function updateRSIZones(data: { time: UTCTimestamp; value: number }[]) {
+    const fill = rsiFillRef.current;
+    if (!fill) return;
+    if (hiddenRef.current.rsi || data.length < 2) {
+      fill.setRegions([], false);
+      return;
+    }
+
+    const first = data[0].time;
+    const last = data[data.length - 1].time;
+    const zone = (top: number, bottom: number, color: string, opacity: number) => ({
+      bands: [
+        { time: first, top, bottom },
+        { time: last, top, bottom },
+      ],
+      color: hexToRgba(color, opacity),
+    });
+
+    // Fill collapses to zero height where the RSI is inside the band, so a
+    // single region per side renders only the overbought / oversold stretches.
+    const overbought: FillBand[] = data.map((p) => ({
+      time: p.time,
+      top: Math.max(p.value, 70),
+      bottom: 70,
+    }));
+    const oversold: FillBand[] = data.map((p) => ({
+      time: p.time,
+      top: 30,
+      bottom: Math.min(p.value, 30),
+    }));
+
+    fill.setRegions(
+      [
+        zone(100, 70, RSI_COLORS.bear, 7),
+        zone(70, 30, RSI_COLORS.band, 10),
+        zone(30, 0, RSI_COLORS.bull, 7),
+        { bands: overbought, color: hexToRgba(RSI_COLORS.bear, 30) },
+        { bands: oversold, color: hexToRgba(RSI_COLORS.bull, 30) },
+      ],
+      true,
+    );
   }
 
   /** Arrow + label on every RSI pivot that diverges from price. */
