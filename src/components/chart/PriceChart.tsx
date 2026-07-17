@@ -13,7 +13,6 @@ import {
   type ISeriesMarkersPluginApi,
   type IPriceLine,
   type LineWidth,
-  type SeriesMarker,
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
@@ -185,22 +184,6 @@ function activeVwapBands(cfg: IndicatorConfig): VwapBand[] {
     .sort((a, b) => a.multiplier - b.multiplier);
 }
 
-/** Spanish label for each divergence, as CdeCripto prints them on the RSI. */
-const DIV_LABELS = {
-  bull: "bull",
-  hidden_bull: "hidden_bull",
-  bear: "bear",
-  hidden_bear: "hidden_bear",
-} as const;
-
-// Match the trend-line colors: green for bullish, red for bearish
-const DIV_COLORS = {
-  bull: "#26a69a",
-  hidden_bull: "#26a69a",
-  bear: "#ef5350",
-  hidden_bear: "#ef5350",
-} as const;
-
 const TV_COLORS = {
   bg: "#131722",
   panel: "#1e222d",
@@ -304,7 +287,6 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const vwapDotRefs = useRef<Map<ISeriesApi<"Line">, ISeriesMarkersPluginApi<Time>>>(
     new Map(),
   );
-  const rsiDivRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const sessionRef = useRef<SessionLinesPrimitive | null>(null);
   /** Day range + offset the session lines were last built for */
   const sessionKeyRef = useRef("");
@@ -361,6 +343,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   movePriceLineRef.current = movePriceLine;
   const moveTrendLineRef = useRef(moveTrendLine);
   moveTrendLineRef.current = moveTrendLine;
+  const indicatorsRef = useRef(indicators);
+  indicatorsRef.current = indicators;
+  const toggleMaximizedPaneRef = useRef(toggleMaximizedPane);
+  toggleMaximizedPaneRef.current = toggleMaximizedPane;
   const trendLinesRef = useRef(trendLines);
   trendLinesRef.current = trendLines;
   const priceLinesRef = useRef(priceLines);
@@ -706,7 +692,6 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       vwapBandRefs.current = [];
       vwapFillRef.current = null;
       vwapDotRefs.current.clear();
-      rsiDivRef.current = null;
       sessionRef.current = null;
       trendSegRef.current = null;
       wt1Ref.current = null;
@@ -819,7 +804,6 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       rsi70Ref.current = null;
       rsiFillRef.current = null;
       rsiSegRef.current = null;
-      rsiDivRef.current = null; // its markers plugin died with the series
     }
     requestAnimationFrame(() => recomputePaneOffsets());
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1551,6 +1535,53 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Double-click an oscillator pane (RSI, Stoch, …) to blow it up big, and
+  // double-click again to restore — the intuitive companion to the ⛶ pill button.
+  useEffect(() => {
+    const el = containerRef.current;
+    const chart = chartRef.current;
+    if (!el || !chart) return;
+
+    const onDbl = (e: MouseEvent) => {
+      if (toolRef.current !== "cursor") return; // don't fight the drawing tools
+      const r = el.getBoundingClientRect();
+      const y = e.clientY - r.top;
+
+      // Which stacked pane holds the click?
+      const panes = chart.panes();
+      let top = 0;
+      let idx = -1;
+      for (let i = 0; i < panes.length; i++) {
+        const h = panes[i].getHeight();
+        if (y >= top && y < top + h) {
+          idx = i;
+          break;
+        }
+        top += h;
+      }
+      if (idx <= 0) return; // pane 0 is the price chart — leave it alone
+
+      // Map the pane index to its indicator, mirroring the create order.
+      const ind = indicatorsRef.current;
+      const rsiI = 1;
+      const macdI = ind.rsi ? 2 : 1;
+      const stochI = 1 + (ind.rsi ? 1 : 0) + (ind.macd ? 1 : 0);
+      const srsiI = stochI + (ind.stoch ? 1 : 0);
+      const wtI = srsiI + (ind.stochrsi ? 1 : 0);
+
+      let key: IndicatorKey | null = null;
+      if (ind.rsi && idx === rsiI) key = "rsi";
+      else if (ind.macd && idx === macdI) key = "macd";
+      else if (ind.stoch && idx === stochI) key = "stoch";
+      else if (ind.stochrsi && idx === srsiI) key = "stochrsi";
+      else if (ind.wavetrend && idx === wtI) key = "wavetrend";
+      if (key) toggleMaximizedPaneRef.current(key);
+    };
+
+    el.addEventListener("dblclick", onDbl);
+    return () => el.removeEventListener("dblclick", onDbl);
+  }, []);
+
   // Paint the symbol's trend lines (plus the one being placed, dashed)
   useEffect(() => {
     const prim = trendSegRef.current;
@@ -1817,42 +1848,24 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     );
   }
 
-  /** Arrow + label on every RSI pivot that diverges from price. */
+  /**
+   * Red/green divergence lines from pivot to pivot on the RSI, like Matt's pane.
+   * Clean look — no arrows or text labels, just the connecting lines.
+   */
   function updateRSIDivergences(
     c: Candle[],
     points: { time: number; value: number }[],
   ) {
-    const series = rsiRef.current;
-    if (!series) return;
+    if (!rsiRef.current) return;
     const cfg = configRef.current;
 
-    let api = rsiDivRef.current;
-    if (!api) {
-      api = createSeriesMarkers(series, []);
-      rsiDivRef.current = api;
-    }
-
     if (!cfg.rsiDiv || hiddenRef.current.rsi) {
-      api.setMarkers([]);
       rsiSegRef.current?.setSegments([], false);
       return;
     }
 
+    // Hidden divergences dashed so continuation vs. reversal reads at a glance.
     const divs = rsiDivergences(c, points, cfg.rsiDivLeft, cfg.rsiDivRight);
-    const markers: SeriesMarker<Time>[] = divs.map((d) => {
-      const bullish = d.kind === "bull" || d.kind === "hidden_bull";
-      return {
-        time: d.time as UTCTimestamp,
-        position: bullish ? "belowBar" : "aboveBar",
-        shape: bullish ? "arrowUp" : "arrowDown",
-        color: DIV_COLORS[d.kind],
-        text: DIV_LABELS[d.kind],
-      };
-    });
-    api.setMarkers(markers);
-
-    // The red/green trend lines from pivot to pivot, like Matt's RSI pane.
-    // Hidden divergences are dashed so the continuation vs. reversal read is instant.
     const segments: Segment[] = divs.map((d) => {
       const bullish = d.kind === "bull" || d.kind === "hidden_bull";
       return {

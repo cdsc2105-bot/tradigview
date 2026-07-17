@@ -46,7 +46,7 @@ export function IndicatorPill({
         {onMaximize && (
           <button
             onClick={onMaximize}
-            title={maximized ? "Restaurar tamaño" : "Ampliar panel"}
+            title={maximized ? "Restaurar tamaño (o doble-click en el panel)" : "Ampliar panel (o doble-click en el panel)"}
             aria-label={maximized ? "Restaurar tamaño" : "Ampliar panel"}
             className={cn(
               "rounded p-0.5 transition-colors hover:bg-tv-panel-hover",
