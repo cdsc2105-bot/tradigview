@@ -8,6 +8,7 @@ import {
   LineSeries,
   HistogramSeries,
   CrosshairMode,
+  type AutoscaleInfo,
   type IChartApi,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
@@ -712,10 +713,30 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           color: TV_COLORS.textMuted,
           priceLineVisible: false,
           lastValueVisible: false,
+          // Cap the scale near the 90th-percentile bar so a single climax spike
+          // clips at the top instead of squashing every normal bar to a sliver.
+          autoscaleInfoProvider: (original: () => AutoscaleInfo | null) => {
+            const res = original();
+            const vols = candlesRef.current
+              .map((c) => c.volume)
+              .filter((x) => x > 0)
+              .sort((a, b) => a - b);
+            if (vols.length === 0) return res;
+            const p90 = vols[Math.min(vols.length - 1, Math.floor(vols.length * 0.9))];
+            const cap = p90 * 1.4;
+            const currentMax = res?.priceRange?.maxValue ?? cap;
+            return {
+              priceRange: {
+                minValue: 0,
+                maxValue: Math.min(currentMax, cap),
+              },
+            };
+          },
         },
         0,
       );
-      v.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+      // Volume gets the bottom ~26% of the price pane.
+      v.priceScale().applyOptions({ scaleMargins: { top: 0.74, bottom: 0 } });
       volumeSeriesRef.current = v;
       // Volume moving-average line (red), on the same volume price scale
       volumeMaRef.current = chartRef.current.addSeries(

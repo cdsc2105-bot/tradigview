@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useChartStore } from "@/lib/store/chart-store";
+import { useChartStore, EXCHANGE_LABELS } from "@/lib/store/chart-store";
 import { fetchTicker24h } from "@/lib/binance/rest";
 import { fetchBitgetTicker } from "@/lib/exchanges/bitget";
+import { fetchFuturesTickers } from "@/lib/exchanges/binance-futures";
 import type { Ticker24h } from "@/lib/binance/types";
 import { formatPrice, formatPct, formatVolume } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -17,15 +18,18 @@ export function BottomPanel() {
     let cancelled = false;
     setT(null);
     const load = () => {
-      const fetcher = exchange === "bitget" ? fetchBitgetTicker : fetchTicker24h;
-      fetcher(symbol)
-        .then((x) => {
-          if (!cancelled) setT(x);
-        })
-        .catch(console.error);
+      const p =
+        exchange === "bitget"
+          ? fetchBitgetTicker(symbol)
+          : exchange === "binancef"
+            ? fetchFuturesTickers([symbol]).then((r) => r[0])
+            : fetchTicker24h(symbol);
+      p.then((x) => {
+        if (!cancelled && x) setT(x);
+      }).catch(console.error);
     };
     load();
-    const id = setInterval(load, 5000);
+    const id = setInterval(load, 3000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -62,7 +66,7 @@ export function BottomPanel() {
       />
       <div className="ml-auto flex shrink-0 items-center gap-2 pl-3 text-[10px] text-tv-text-dim">
         <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-tv-green" />
-        <span>{exchange === "bitget" ? "Bitget Perp" : "Binance"} · Live</span>
+        <span>{EXCHANGE_LABELS[exchange]} · Live</span>
       </div>
     </div>
   );
