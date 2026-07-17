@@ -2055,7 +2055,63 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     loadMoreRef.current = () => void loadOlder();
 
-    async function load() {
+    // ——— Keep-alive ———
+    // The chart must never freeze: Bitget has no kline WebSocket, Binance's WS
+    // can die silently, tabs get put to sleep, and the initial fetch can fail.
+    // `lastTick` tracks the last live update; a watchdog resyncs over REST
+    // whenever the data goes stale, the tab wakes up, or the network returns.
+    let lastTick = Date.now();
+    let resyncing = false;
+
+    /** Refetch the most recent candles and splice them over the loaded tail. */
+    async function resync() {
+      if (cancelled || resyncing || fetchingOlder) return;
+      resyncing = true;
+      try {
+        const fresh = await KLINE_FETCHERS[exchange](symbol, timeframe, 300);
+        if (cancelled || fresh.length === 0) return;
+
+        const hadData = candlesRef.current.length > 0;
+        const firstFresh = fresh[0].time;
+        const keep = candlesRef.current.filter((c) => c.time < firstFresh);
+        candlesRef.current = [...keep, ...fresh];
+        redrawAll();
+        if (!hadData) {
+          // The initial load must have failed — treat this as it
+          chartRef.current?.timeScale().fitContent();
+          requestAnimationFrame(() => recomputePaneOffsets());
+        }
+
+        const last = fresh[fresh.length - 1];
+        const prev = fresh[fresh.length - 2] ?? last;
+        setLastPrice({
+          value: last.close,
+          pct: prev.close === 0 ? 0 : ((last.close - prev.close) / prev.close) * 100,
+        });
+        lastTick = Date.now();
+      } catch (e) {
+        console.error("Resync failed:", e);
+      } finally {
+        resyncing = false;
+      }
+    }
+
+    // Bitget is REST-only, so "live" means polling every few seconds. For the
+    // Binance venues the WS is primary and this only fires if it goes quiet.
+    const STALE_MS = exchange === "bitget" ? 4_000 : 30_000;
+    const watchdog = setInterval(() => {
+      if (document.hidden) return; // don't burn requests in background tabs
+      if (Date.now() - lastTick > STALE_MS) void resync();
+    }, exchange === "bitget" ? 5_000 : 10_000);
+
+    // Waking the tab or regaining network = catch up immediately.
+    const onWake = () => {
+      if (!document.hidden) void resync();
+    };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("online", onWake);
+
+    async function load(attempt = 0) {
       try {
         const klines = await KLINE_FETCHERS[exchange](symbol, timeframe, PAGE_SIZE);
         if (cancelled) return;
@@ -2063,6 +2119,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         redrawAll();
         chartRef.current?.timeScale().fitContent();
         requestAnimationFrame(() => recomputePaneOffsets());
+        lastTick = Date.now();
 
         if (klines.length > 0) {
           const last = klines[klines.length - 1];
@@ -2074,7 +2131,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         }
 
         // Live candles via WebSocket — spot and futures share the protocol;
-        // Bitget has no public multiplexed kline stream, so it stays REST-only.
+        // Bitget has no public multiplexed kline stream, so it polls (above).
         if (exchange === "bitget") return;
         const ws = exchange === "binancef" ? getBinanceFuturesWS() : getBinanceWS();
         unsub = ws.subscribeKline({
@@ -2082,6 +2139,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           interval: timeframe,
           onCandle: (k) => {
             if (!candleSeriesRef.current) return;
+            lastTick = Date.now(); // the stream is alive — hold the watchdog off
             const arr = candlesRef.current;
             const lastCandle = arr[arr.length - 1];
             if (lastCandle && lastCandle.time === k.time) {
@@ -2130,6 +2188,13 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         });
       } catch (e) {
         console.error("Failed to load chart data:", e);
+        // Retry with backoff — a flaky connection must not leave a dead chart.
+        // After the retries run out, the watchdog keeps trying via resync().
+        if (!cancelled && attempt < 4) {
+          setTimeout(() => {
+            if (!cancelled) void load(attempt + 1);
+          }, 1_500 * (attempt + 1));
+        }
       }
     }
 
@@ -2139,6 +2204,9 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       cancelled = true;
       loadMoreRef.current = null;
       setLoadingHistory(false);
+      clearInterval(watchdog);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("online", onWake);
       if (unsub) unsub();
     };
   }, [symbol, timeframe, exchange]);
