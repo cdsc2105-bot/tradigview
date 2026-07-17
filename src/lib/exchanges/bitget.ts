@@ -8,6 +8,9 @@ const BITGET_BASE = "https://api.bitget.com/api/v2/mix/market";
  */
 const GRANULARITY_MAP: Record<Timeframe, string> = {
   "1m": "1m",
+  // 2m doesn't exist on any venue — the chart aggregates 1m client-side and
+  // never requests it, this entry just keeps the map total.
+  "2m": "1m",
   "3m": "3m",
   "5m": "5m",
   "15m": "15m",

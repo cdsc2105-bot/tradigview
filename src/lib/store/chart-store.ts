@@ -368,6 +368,13 @@ interface ChartState {
   setTool: (t: DrawingTool) => void;
   addPriceLine: (price: number, symbol: string) => void;
   addTrendLine: (line: Omit<TrendLine, "id">) => void;
+  removePriceLine: (id: string) => void;
+  removeTrendLine: (id: string) => void;
+  movePriceLine: (id: string, price: number) => void;
+  moveTrendLine: (
+    id: string,
+    patch: Partial<Pick<TrendLine, "t1" | "p1" | "t2" | "p2">>,
+  ) => void;
   /** Clears price lines AND trend lines for the symbol (or all) */
   clearPriceLines: (symbol?: string) => void;
   setSymbolDialogOpen: (v: boolean) => void;
@@ -576,6 +583,26 @@ export const useChartStore = create<ChartState>()(
                   : `${Date.now()}-${Math.random()}`,
             },
           ],
+        })),
+      removePriceLine: (id) =>
+        set((state) => ({
+          priceLines: state.priceLines.filter((p) => p.id !== id),
+        })),
+      removeTrendLine: (id) =>
+        set((state) => ({
+          trendLines: state.trendLines.filter((t) => t.id !== id),
+        })),
+      movePriceLine: (id, price) =>
+        set((state) => ({
+          priceLines: state.priceLines.map((p) =>
+            p.id === id ? { ...p, price } : p,
+          ),
+        })),
+      moveTrendLine: (id, patch) =>
+        set((state) => ({
+          trendLines: state.trendLines.map((t) =>
+            t.id === id ? { ...t, ...patch } : t,
+          ),
         })),
       clearPriceLines: (symbol) =>
         set((state) => ({

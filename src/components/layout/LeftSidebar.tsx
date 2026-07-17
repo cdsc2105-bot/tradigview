@@ -1,6 +1,6 @@
 "use client";
 
-import { MousePointer2, Minus, Ruler, Trash2, TrendingUp, Lock } from "lucide-react";
+import { MousePointer2, Minus, Ruler, Trash2, TrendingUp, Eraser, Lock } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChartStore, type DrawingTool } from "@/lib/store/chart-store";
 import { cn } from "@/lib/utils";
@@ -31,6 +31,12 @@ const TOOLS: ToolDef[] = [
     icon: Ruler,
     label: "Regla / Medir",
     hint: "Click en dos puntos para medir Δ precio, %, barras y volumen · Esc cancela",
+  },
+  {
+    key: "eraser",
+    icon: Eraser,
+    label: "Goma de borrar",
+    hint: "Click sobre una línea para borrar solo esa",
   },
 ];
 
@@ -80,9 +86,10 @@ export function LeftSidebar() {
           <Trash2 className="h-4 w-4" />
         </TooltipTrigger>
         <TooltipContent side="right" className="text-xs">
-          <div className="font-medium">Borrar dibujos</div>
+          <div className="font-medium">Borrar todos los dibujos</div>
           <div className="mt-0.5 text-[10px] text-tv-text-muted">
-            Limpia las líneas de este símbolo
+            Limpia todas las líneas de este símbolo — para borrar una sola, usa
+            la goma
           </div>
         </TooltipContent>
       </Tooltip>

@@ -21,6 +21,7 @@ import { fetchKlines } from "@/lib/binance/rest";
 import { fetchBitgetKlines } from "@/lib/exchanges/bitget";
 import { fetchFuturesKlines } from "@/lib/exchanges/binance-futures";
 import { getBinanceWS, getBinanceFuturesWS } from "@/lib/binance/ws";
+import { aggregate2m, makeTwoMinuteAggregator } from "@/lib/aggregate";
 import {
   ema,
   rsi,
@@ -77,6 +78,27 @@ interface MeasureState {
 }
 const INITIAL_MEASURE: MeasureState = { phase: "idle", a: null, b: null };
 
+/** What the pointer is on top of when interacting with user drawings. */
+type DrawingHit =
+  | { kind: "trend"; id: string; part: "p1" | "p2" | "body" }
+  | { kind: "hline"; id: string };
+
+/** Pixel distance from a point to the segment (x1,y1)–(x2,y2). */
+function distToSegment(
+  x: number,
+  y: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): number {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((x - x1) * dx + (y - y1) * dy) / lenSq));
+  return Math.hypot(x - (x1 + t * dx), y - (y1 + t * dy));
+}
+
 function durationLabel(aTime: number, bTime: number): string {
   const diff = Math.abs(bTime - aTime);
   const days = Math.floor(diff / 86400);
@@ -102,6 +124,24 @@ const KLINE_FETCHERS: Record<
   binancef: fetchFuturesKlines,
   bitget: fetchBitgetKlines,
 };
+
+/**
+ * Fetch candles, synthesizing the 2m interval (which no venue offers) from
+ * twice as many 1m candles.
+ */
+async function fetchCandles(
+  exchange: Exchange,
+  symbol: string,
+  timeframe: Timeframe,
+  limit: number,
+  endTime?: number,
+): Promise<Candle[]> {
+  if (timeframe !== "2m") {
+    return KLINE_FETCHERS[exchange](symbol, timeframe, limit, endTime);
+  }
+  const oneMin = await KLINE_FETCHERS[exchange](symbol, "1m", limit, endTime);
+  return aggregate2m(oneMin);
+}
 
 /** Candles fetched per request, and how far back we let the buffer grow. */
 const PAGE_SIZE = 1000;
@@ -266,6 +306,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const trendLines = useChartStore((s) => s.trendLines);
   const addPriceLine = useChartStore((s) => s.addPriceLine);
   const addTrendLine = useChartStore((s) => s.addTrendLine);
+  const removePriceLine = useChartStore((s) => s.removePriceLine);
+  const removeTrendLine = useChartStore((s) => s.removeTrendLine);
+  const movePriceLine = useChartStore((s) => s.movePriceLine);
+  const moveTrendLine = useChartStore((s) => s.moveTrendLine);
   const removeIndicator = useChartStore((s) => s.removeIndicator);
   const toggleHidden = useChartStore((s) => s.toggleHidden);
   const setSettingsTarget = useChartStore((s) => s.setSettingsTarget);
@@ -281,6 +325,18 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   addPriceLineRef.current = addPriceLine;
   const addTrendLineRef = useRef(addTrendLine);
   addTrendLineRef.current = addTrendLine;
+  const removePriceLineRef = useRef(removePriceLine);
+  removePriceLineRef.current = removePriceLine;
+  const removeTrendLineRef = useRef(removeTrendLine);
+  removeTrendLineRef.current = removeTrendLine;
+  const movePriceLineRef = useRef(movePriceLine);
+  movePriceLineRef.current = movePriceLine;
+  const moveTrendLineRef = useRef(moveTrendLine);
+  moveTrendLineRef.current = moveTrendLine;
+  const trendLinesRef = useRef(trendLines);
+  trendLinesRef.current = trendLines;
+  const priceLinesRef = useRef(priceLines);
+  priceLinesRef.current = priceLines;
   const symbolRef = useRef(symbol);
   symbolRef.current = symbol;
   const configRef = useRef(config);
@@ -356,12 +412,38 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         borderColor: TV_COLORS.border,
         textColor: TV_COLORS.textMuted,
       },
+      // Show times in the viewer's local timezone (like TradingView and Matt's
+      // UTC+2 chart) instead of the library's UTC default, so the same candle
+      // lines up under the same clock label.
+      localization: {
+        timeFormatter: (t: number) => {
+          const d = new Date(t * 1000);
+          return d.toLocaleString(undefined, {
+            day: "numeric",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+          });
+        },
+      },
       timeScale: {
         borderColor: TV_COLORS.border,
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 12,
         barSpacing: 8,
+        tickMarkFormatter: (t: number, tickType: number) => {
+          const d = new Date(t * 1000);
+          // Day-level marks (Year=0, Month=1, DayOfMonth=2) show the date;
+          // intraday marks show local HH:mm.
+          if (tickType <= 2) {
+            return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+          }
+          return `${String(d.getHours()).padStart(2, "0")}:${String(
+            d.getMinutes(),
+          ).padStart(2, "0")}`;
+        },
       },
       autoSize: true,
     });
@@ -1245,7 +1327,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       }
     }
     for (const pl of linesForThisSymbol) {
-      if (!map.has(pl.id)) {
+      const existing = map.get(pl.id);
+      if (existing) {
+        existing.applyOptions({ price: pl.price }); // follows drag-to-move
+      } else {
         const apiLine = series.createPriceLine({
           price: pl.price,
           color: TV_COLORS.blue,
@@ -1270,6 +1355,167 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (tool !== "measure") setMeasure(INITIAL_MEASURE);
     if (tool !== "trend") setTrendDraft(INITIAL_MEASURE);
   }, [tool]);
+
+  /**
+   * Which drawing (if any) sits under the given container-relative pixel.
+   * Endpoints win over line bodies so grabbing a handle feels precise.
+   */
+  function hitTestDrawings(x: number, y: number): DrawingHit | null {
+    const chart = chartRef.current;
+    const series = candleSeriesRef.current;
+    if (!chart || !series) return null;
+    // Drawings live on the main pane only
+    const paneHeight = chart.panes()[0]?.getHeight() ?? Infinity;
+    if (y > paneHeight) return null;
+
+    const ts = chart.timeScale();
+    const TOL = 6;
+    const HANDLE = 9;
+
+    for (const t of trendLinesRef.current) {
+      if (t.symbol !== symbolRef.current) continue;
+      const x1 = ts.timeToCoordinate(t.t1 as UTCTimestamp);
+      const x2 = ts.timeToCoordinate(t.t2 as UTCTimestamp);
+      const y1 = series.priceToCoordinate(t.p1);
+      const y2 = series.priceToCoordinate(t.p2);
+      if (x1 === null || x2 === null || y1 === null || y2 === null) continue;
+      if (Math.hypot(x - x1, y - y1) <= HANDLE) return { kind: "trend", id: t.id, part: "p1" };
+      if (Math.hypot(x - x2, y - y2) <= HANDLE) return { kind: "trend", id: t.id, part: "p2" };
+      if (distToSegment(x, y, x1, y1, x2, y2) <= TOL) return { kind: "trend", id: t.id, part: "body" };
+    }
+
+    for (const p of priceLinesRef.current) {
+      if (p.symbol !== symbolRef.current) continue;
+      const py = series.priceToCoordinate(p.price);
+      if (py !== null && Math.abs(y - py) <= TOL) return { kind: "hline", id: p.id };
+    }
+    return null;
+  }
+
+  // Selective erase + drag-to-move. A capture-phase mousedown wins the race
+  // against the chart's own pan handler, so grabbing a line doesn't scroll
+  // the chart, and the eraser deletes exactly the drawing under the click.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    interface DragState {
+      hit: DrawingHit;
+      startX: number;
+      startY: number;
+      orig: { t1: number; p1: number; t2: number; p2: number } | { price: number };
+    }
+    let drag: DragState | null = null;
+
+    const posOf = (e: MouseEvent) => {
+      const r = el.getBoundingClientRect();
+      return { x: e.clientX - r.left, y: e.clientY - r.top };
+    };
+
+    const onDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      const toolNow = toolRef.current;
+      if (toolNow !== "cursor" && toolNow !== "eraser") return;
+      const { x, y } = posOf(e);
+      const hit = hitTestDrawings(x, y);
+      if (!hit) return;
+
+      e.preventDefault();
+      e.stopPropagation(); // keep lightweight-charts from starting a pan
+
+      if (toolNow === "eraser") {
+        if (hit.kind === "trend") removeTrendLineRef.current(hit.id);
+        else removePriceLineRef.current(hit.id);
+        return;
+      }
+
+      const orig =
+        hit.kind === "trend"
+          ? (() => {
+              const t = trendLinesRef.current.find((l) => l.id === hit.id)!;
+              return { t1: t.t1, p1: t.p1, t2: t.t2, p2: t.p2 };
+            })()
+          : { price: priceLinesRef.current.find((p) => p.id === hit.id)!.price };
+      drag = { hit, startX: x, startY: y, orig };
+      el.style.cursor = "grabbing";
+    };
+
+    const onMove = (e: MouseEvent) => {
+      if (!drag) {
+        // Hover feedback: show a grab hand over anything draggable
+        const toolNow = toolRef.current;
+        if (toolNow === "cursor" || toolNow === "eraser") {
+          const { x, y } = posOf(e);
+          const hit = hitTestDrawings(x, y);
+          el.style.cursor = hit ? (toolNow === "eraser" ? "pointer" : "grab") : "";
+        }
+        return;
+      }
+
+      const chart = chartRef.current;
+      const series = candleSeriesRef.current;
+      if (!chart || !series) return;
+      const ts = chart.timeScale();
+      const { x, y } = posOf(e);
+
+      if (drag.hit.kind === "hline") {
+        const price = series.coordinateToPrice(y);
+        if (price !== null && isFinite(price)) {
+          movePriceLineRef.current(drag.hit.id, price);
+        }
+        return;
+      }
+
+      const o = drag.orig as { t1: number; p1: number; t2: number; p2: number };
+      const dx = x - drag.startX;
+      const dy = y - drag.startY;
+      const shifted = (t: number, p: number) => {
+        const px = ts.timeToCoordinate(t as UTCTimestamp);
+        const py = series.priceToCoordinate(p);
+        if (px === null || py === null) return null;
+        const nt = ts.coordinateToTime(px + dx);
+        const np = series.coordinateToPrice(py + dy);
+        if (nt === null || np === null || !isFinite(np)) return null;
+        return { t: Number(nt), p: np };
+      };
+
+      if (drag.hit.part === "p1") {
+        const n = shifted(o.t1, o.p1);
+        if (n) moveTrendLineRef.current(drag.hit.id, { t1: n.t, p1: n.p });
+      } else if (drag.hit.part === "p2") {
+        const n = shifted(o.t2, o.p2);
+        if (n) moveTrendLineRef.current(drag.hit.id, { t2: n.t, p2: n.p });
+      } else {
+        const n1 = shifted(o.t1, o.p1);
+        const n2 = shifted(o.t2, o.p2);
+        if (n1 && n2) {
+          moveTrendLineRef.current(drag.hit.id, {
+            t1: n1.t,
+            p1: n1.p,
+            t2: n2.t,
+            p2: n2.p,
+          });
+        }
+      }
+    };
+
+    const onUp = () => {
+      if (drag) {
+        drag = null;
+        el.style.cursor = "";
+      }
+    };
+
+    el.addEventListener("mousedown", onDown, true);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      el.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Escape cancels whatever is being drawn and returns to the cursor
   useEffect(() => {
@@ -2028,7 +2274,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       setLoadingHistory(true);
       try {
         const endTime = oldest.time * 1000 - 1;
-        const page = await KLINE_FETCHERS[exchange](symbol, timeframe, PAGE_SIZE, endTime);
+        const page = await fetchCandles(exchange, symbol, timeframe, PAGE_SIZE, endTime);
         if (cancelled) return;
 
         const older = page.filter((c) => c.time < oldest.time);
@@ -2072,7 +2318,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       if (cancelled || resyncing || fetchingOlder) return;
       resyncing = true;
       try {
-        const fresh = await KLINE_FETCHERS[exchange](symbol, timeframe, 300);
+        const fresh = await fetchCandles(exchange, symbol, timeframe, 300);
         if (cancelled || fresh.length === 0) return;
 
         const hadData = candlesRef.current.length > 0;
@@ -2117,7 +2363,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     async function load(attempt = 0) {
       try {
-        const klines = await KLINE_FETCHERS[exchange](symbol, timeframe, PAGE_SIZE);
+        const klines = await fetchCandles(exchange, symbol, timeframe, PAGE_SIZE);
         if (cancelled) return;
         candlesRef.current = klines;
         redrawAll();
@@ -2138,10 +2384,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         // Bitget has no public multiplexed kline stream, so it polls (above).
         if (exchange === "bitget") return;
         const ws = exchange === "binancef" ? getBinanceFuturesWS() : getBinanceWS();
-        unsub = ws.subscribeKline({
-          symbol,
-          interval: timeframe,
-          onCandle: (k) => {
+        const handleCandle = (k: Candle) => {
             if (!candleSeriesRef.current) return;
             lastTick = Date.now(); // the stream is alive — hold the watchdog off
             const arr = candlesRef.current;
@@ -2188,7 +2431,22 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
               value: k.close,
               pct: prev && prev.close !== 0 ? ((k.close - prev.close) / prev.close) * 100 : 0,
             });
-          },
+        };
+
+        // 2m doesn't exist upstream: subscribe to the 1m stream and roll pairs
+        // of minutes into the evolving 2m candle before the normal handling.
+        const onCandle =
+          timeframe === "2m"
+            ? makeTwoMinuteAggregator(handleCandle, (bucket) => {
+                const last = candlesRef.current[candlesRef.current.length - 1];
+                return last && last.time === bucket ? { ...last } : undefined;
+              })
+            : handleCandle;
+
+        unsub = ws.subscribeKline({
+          symbol,
+          interval: timeframe === "2m" ? "1m" : timeframe,
+          onCandle,
         });
       } catch (e) {
         console.error("Failed to load chart data:", e);

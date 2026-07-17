@@ -1,5 +1,7 @@
 export type Timeframe =
   | "1m"
+  /** Not offered by any venue's API — built client-side from two 1m candles */
+  | "2m"
   | "3m"
   | "5m"
   | "15m"
