@@ -1,6 +1,6 @@
 "use client";
 
-import { Eye, EyeOff, Settings, X } from "lucide-react";
+import { Eye, EyeOff, Maximize2, Minimize2, Settings, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -11,6 +11,9 @@ interface Props {
   onToggleHide: () => void;
   onSettings: () => void;
   onRemove: () => void;
+  /** Pane indicators only: toggle making this pane the big one */
+  onMaximize?: () => void;
+  maximized?: boolean;
 }
 
 export function IndicatorPill({
@@ -21,6 +24,8 @@ export function IndicatorPill({
   onToggleHide,
   onSettings,
   onRemove,
+  onMaximize,
+  maximized,
 }: Props) {
   return (
     <div
@@ -38,6 +43,25 @@ export function IndicatorPill({
         <span className="tabular-nums text-tv-text-muted">{value}</span>
       )}
       <div className="ml-1 flex items-center gap-0.5">
+        {onMaximize && (
+          <button
+            onClick={onMaximize}
+            title={maximized ? "Restaurar tamaño" : "Ampliar panel"}
+            aria-label={maximized ? "Restaurar tamaño" : "Ampliar panel"}
+            className={cn(
+              "rounded p-0.5 transition-colors hover:bg-tv-panel-hover",
+              maximized
+                ? "text-tv-blue hover:text-tv-blue"
+                : "text-tv-text-dim hover:text-tv-text",
+            )}
+          >
+            {maximized ? (
+              <Minimize2 className="h-3 w-3" />
+            ) : (
+              <Maximize2 className="h-3 w-3" />
+            )}
+          </button>
+        )}
         <button
           onClick={onToggleHide}
           title={hidden ? "Mostrar" : "Ocultar"}

@@ -344,6 +344,8 @@ interface ChartState {
   watchlistOpen: boolean;
   /** Which indicator's settings dialog is open (null = closed) */
   settingsTarget: IndicatorKey | null;
+  /** Pane indicator currently blown up big (null = normal layout) */
+  maximizedPane: IndicatorKey | null;
 
   // Actions
   setSymbol: (s: string) => void;
@@ -371,6 +373,8 @@ interface ChartState {
   setSymbolDialogOpen: (v: boolean) => void;
   setWatchlistOpen: (v: boolean) => void;
   setSettingsTarget: (k: IndicatorKey | null) => void;
+  /** Toggle a pane between big and normal (same key twice = restore) */
+  toggleMaximizedPane: (k: IndicatorKey) => void;
 }
 
 export const useChartStore = create<ChartState>()(
@@ -425,6 +429,7 @@ export const useChartStore = create<ChartState>()(
       symbolDialogOpen: false,
       watchlistOpen: false,
       settingsTarget: null,
+      maximizedPane: null,
 
       setSymbol: (symbol) => set({ symbol }),
       setExchange: (exchange) => set({ exchange }),
@@ -584,6 +589,8 @@ export const useChartStore = create<ChartState>()(
       setSymbolDialogOpen: (symbolDialogOpen) => set({ symbolDialogOpen }),
       setWatchlistOpen: (watchlistOpen) => set({ watchlistOpen }),
       setSettingsTarget: (settingsTarget) => set({ settingsTarget }),
+      toggleMaximizedPane: (k) =>
+        set((s) => ({ maximizedPane: s.maximizedPane === k ? null : k })),
     }),
     {
       name: "tv-gratis-chart-state",

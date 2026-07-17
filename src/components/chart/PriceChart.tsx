@@ -269,6 +269,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const removeIndicator = useChartStore((s) => s.removeIndicator);
   const toggleHidden = useChartStore((s) => s.toggleHidden);
   const setSettingsTarget = useChartStore((s) => s.setSettingsTarget);
+  const maximizedPane = useChartStore((s) => s.maximizedPane);
+  const toggleMaximizedPane = useChartStore((s) => s.toggleMaximizedPane);
 
   // Refs to avoid recreating subscribeClick on every tool change
   const toolRef = useRef(tool);
@@ -1504,11 +1506,13 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       bottom: Math.min(p.value, 30),
     }));
 
+    // Zones exactly as Matt's pane: red only at the 85–100 extreme, purple
+    // through the 30–70 middle, green only at the 0–15 extreme.
     fill.setRegions(
       [
-        zone(100, 70, RSI_COLORS.bear, 7),
+        zone(100, 85, RSI_COLORS.bear, 10),
         zone(70, 30, RSI_COLORS.band, 10),
-        zone(30, 0, RSI_COLORS.bull, 7),
+        zone(15, 0, RSI_COLORS.bull, 10),
         { bands: overbought, color: hexToRgba(RSI_COLORS.bear, 30) },
         { bands: oversold, color: hexToRgba(RSI_COLORS.bull, 30) },
       ],
@@ -2225,6 +2229,46 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const srsiPaneIdx = stochPaneIdx + (indicators.stoch ? 1 : 0);
   const wtPaneIdx = srsiPaneIdx + (indicators.stochrsi ? 1 : 0);
 
+  // Blow one oscillator pane up big (like maximizing a pane in TradingView) by
+  // re-weighting the stretch factors; toggling back restores the 3:1 layout.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const paneIdxFor: Partial<Record<IndicatorKey, number>> = {
+      rsi: rsiPaneIdx,
+      macd: macdPaneIdx,
+      stoch: stochPaneIdx,
+      stochrsi: srsiPaneIdx,
+      wavetrend: wtPaneIdx,
+    };
+    const maxIdx =
+      maximizedPane && indicators[maximizedPane]
+        ? paneIdxFor[maximizedPane]
+        : undefined;
+    try {
+      chart.panes().forEach((p, i) => {
+        if (maxIdx !== undefined) {
+          p.setStretchFactor(i === maxIdx ? 6 : 1);
+        } else {
+          p.setStretchFactor(i === 0 ? 3 : 1);
+        }
+      });
+    } catch {}
+    requestAnimationFrame(() => recomputePaneOffsets());
+  }, [
+    maximizedPane,
+    indicators.rsi,
+    indicators.macd,
+    indicators.stoch,
+    indicators.stochrsi,
+    indicators.wavetrend,
+    rsiPaneIdx,
+    macdPaneIdx,
+    stochPaneIdx,
+    srsiPaneIdx,
+    wtPaneIdx,
+  ]);
+
   let measureRender: React.ReactNode = null;
   if (
     measure.a &&
@@ -2493,6 +2537,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             onToggleHide={() => toggleHidden("rsi")}
             onSettings={() => setSettingsTarget("rsi")}
             onRemove={() => removeIndicator("rsi")}
+            onMaximize={() => toggleMaximizedPane("rsi")}
+            maximized={maximizedPane === "rsi"}
           />
         </div>
       )}
@@ -2515,6 +2561,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             onToggleHide={() => toggleHidden("macd")}
             onSettings={() => setSettingsTarget("macd")}
             onRemove={() => removeIndicator("macd")}
+            onMaximize={() => toggleMaximizedPane("macd")}
+            maximized={maximizedPane === "macd"}
           />
         </div>
       )}
@@ -2537,6 +2585,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             onToggleHide={() => toggleHidden("stoch")}
             onSettings={() => setSettingsTarget("stoch")}
             onRemove={() => removeIndicator("stoch")}
+            onMaximize={() => toggleMaximizedPane("stoch")}
+            maximized={maximizedPane === "stoch"}
           />
         </div>
       )}
@@ -2559,6 +2609,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             onToggleHide={() => toggleHidden("stochrsi")}
             onSettings={() => setSettingsTarget("stochrsi")}
             onRemove={() => removeIndicator("stochrsi")}
+            onMaximize={() => toggleMaximizedPane("stochrsi")}
+            maximized={maximizedPane === "stochrsi"}
           />
         </div>
       )}
@@ -2581,6 +2633,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             onToggleHide={() => toggleHidden("wavetrend")}
             onSettings={() => setSettingsTarget("wavetrend")}
             onRemove={() => removeIndicator("wavetrend")}
+            onMaximize={() => toggleMaximizedPane("wavetrend")}
+            maximized={maximizedPane === "wavetrend"}
           />
         </div>
       )}
