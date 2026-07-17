@@ -160,7 +160,9 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   ema20: 20,
   ema50: 50,
   ema200: 200,
-  rsi: 14,
+  // 7 (not the classic 14) to match CdeCripto's RSI, which plunges deep into the
+  // oversold zone on sharp moves — the shorter period is what makes it reactive.
+  rsi: 7,
   macdFast: 12,
   macdSlow: 26,
   macdSignal: 9,
@@ -626,7 +628,8 @@ export const useChartStore = create<ChartState>()(
       // CdeCripto-style VWAP + RSI setup over whatever was saved before.
       // v3 turns on the double-stochastic bottom panes (Stoch RSI + Stoch).
       // v4 matches Matt's real TradingView bottom: RSI + Stochastic only.
-      version: 4,
+      // v5 sets the RSI period to 7 (Matt's), so it dips deep into oversold.
+      version: 5,
       migrate: (persisted, version) => {
         const p = (persisted ?? {}) as Partial<ChartState>;
         let migrated =
@@ -687,6 +690,15 @@ export const useChartStore = create<ChartState>()(
               ...migrated.config,
               rsiColor: DEFAULT_CONFIG.rsiColor,
               rsiMaColor: DEFAULT_CONFIG.rsiMaColor,
+            } as IndicatorConfig,
+          };
+        }
+        if (version < 5) {
+          migrated = {
+            ...migrated,
+            config: {
+              ...migrated.config,
+              rsi: DEFAULT_CONFIG.rsi, // 7 — matches Matt's deep-diving RSI
             } as IndicatorConfig,
           };
         }

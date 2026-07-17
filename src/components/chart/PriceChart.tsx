@@ -99,6 +99,32 @@ function distToSegment(
   return Math.hypot(x - (x1 + t * dx), y - (y1 + t * dy));
 }
 
+/** Bars back used for the volume average / relative-volume read. */
+const VOL_MA_PERIOD = 21;
+
+/**
+ * Histogram bar color by relative volume (bar ÷ its average). Keeps the
+ * green/red up-down hue but scales opacity so climax bars pop and quiet bars
+ * fade — the quick "¿hay volumen o no?" read.
+ */
+function volBarColor(isUp: boolean, rvol: number): string {
+  const hue = isUp ? TV_COLORS.green : TV_COLORS.red;
+  const alpha =
+    rvol >= 2 ? "e6" : // climax — near solid
+    rvol >= 1.2 ? "b3" : // high
+    rvol >= 0.7 ? "66" : // normal
+    "30"; // low — faded
+  return `${hue}${alpha}`;
+}
+
+/** Spanish label for a relative-volume reading. */
+function volStateLabel(rvol: number): string {
+  if (rvol >= 2) return "Muy alto";
+  if (rvol >= 1.2) return "Alto";
+  if (rvol >= 0.7) return "Normal";
+  return "Bajo";
+}
+
 function durationLabel(aTime: number, bTime: number): string {
   const diff = Math.abs(bTime - aTime);
   const days = Math.floor(diff / 86400);
@@ -208,6 +234,8 @@ interface LastValues {
   macdSignal?: number;
   macdHist?: number;
   volume?: number;
+  /** Latest bar's volume ÷ its 21-bar average (relative volume) */
+  volRvol?: number;
   bbUpper?: number;
   bbMiddle?: number;
   bbLower?: number;
@@ -716,13 +744,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         },
         0,
       );
-      const data = candlesRef.current.map((k) => ({
-        time: k.time as UTCTimestamp,
-        value: k.volume,
-        color: k.close >= k.open ? `${TV_COLORS.green}66` : `${TV_COLORS.red}66`,
-      }));
-      v.setData(data);
-      updateVolumeMa();
+      updateVolume();
     } else if (!indicators.volume && volumeSeriesRef.current && chartRef.current) {
       chartRef.current.removeSeries(volumeSeriesRef.current);
       if (volumeMaRef.current) chartRef.current.removeSeries(volumeMaRef.current);
@@ -1555,21 +1577,50 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     prim.setSegments(segs, segs.length > 0);
   }, [trendLines, symbol, trendDraft]);
 
-  /** 21-period SMA of volume, drawn as a line over the volume histogram. */
-  function updateVolumeMa() {
+  /**
+   * Recolor every volume bar by its relative volume (bar ÷ 21-bar average),
+   * redraw the average line, and report the latest reading for the pill so the
+   * user can tell strong volume from weak at a glance.
+   */
+  function updateVolume() {
     const c = candlesRef.current;
-    if (!volumeMaRef.current || c.length === 0) return;
-    const period = 21;
-    const out: { time: UTCTimestamp; value: number }[] = [];
+    const series = volumeSeriesRef.current;
+    if (!series || c.length === 0) return;
+    const period = VOL_MA_PERIOD;
+
+    // Rolling average at every bar; early bars use however many exist so the
+    // relative read is still meaningful before a full window is available.
+    const maAt = new Array<number>(c.length);
     let sum = 0;
     for (let i = 0; i < c.length; i++) {
       sum += c[i].volume;
       if (i >= period) sum -= c[i - period].volume;
-      if (i >= period - 1) {
-        out.push({ time: c[i].time as UTCTimestamp, value: sum / period });
-      }
+      maAt[i] = sum / Math.min(i + 1, period);
     }
-    volumeMaRef.current.setData(out);
+
+    series.setData(
+      c.map((k, i) => ({
+        time: k.time as UTCTimestamp,
+        value: k.volume,
+        color: volBarColor(k.close >= k.open, maAt[i] > 0 ? k.volume / maAt[i] : 1),
+      })),
+    );
+
+    if (volumeMaRef.current) {
+      const line: { time: UTCTimestamp; value: number }[] = [];
+      for (let i = period - 1; i < c.length; i++) {
+        line.push({ time: c[i].time as UTCTimestamp, value: maAt[i] });
+      }
+      volumeMaRef.current.setData(line);
+    }
+
+    const lastMa = maAt[c.length - 1];
+    const lastVol = c[c.length - 1].volume;
+    setLastValues((prev) => ({
+      ...prev,
+      volume: lastVol,
+      volRvol: lastMa > 0 ? lastVol / lastMa : 1,
+    }));
   }
 
   function updateEMAs() {
@@ -2225,15 +2276,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         close: k.close,
       })),
     );
-    volumeSeriesRef.current?.setData(
-      klines.map((k) => ({
-        time: k.time as UTCTimestamp,
-        value: k.volume,
-        color: k.close >= k.open ? `${TV_COLORS.green}66` : `${TV_COLORS.red}66`,
-      })),
-    );
     updateEMAs();
-    updateVolumeMa();
+    updateVolume();
     updateRibbon();
     updateRSI();
     updateMACD();
@@ -2406,15 +2450,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
               low: k.low,
               close: k.close,
             });
-            if (volumeSeriesRef.current) {
-              volumeSeriesRef.current.update({
-                time: k.time as UTCTimestamp,
-                value: k.volume,
-                color: k.close >= k.open ? `${TV_COLORS.green}66` : `${TV_COLORS.red}66`,
-              });
-            }
             updateEMAs();
-            updateVolumeMa();
+            updateVolume(); // recolors bars by relative volume, incl. the live one
             updateRibbon();
             updateRSI();
             updateMACD();
@@ -2707,8 +2744,18 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           {indicators.volume && (
             <IndicatorPill
               name="Vol"
-              value={lastValues.volume !== undefined ? formatVolume(lastValues.volume) : undefined}
-              color={INDICATOR_COLORS.volume}
+              value={
+                lastValues.volume !== undefined
+                  ? `${formatVolume(lastValues.volume)} · ${(lastValues.volRvol ?? 1).toFixed(1)}x ${volStateLabel(lastValues.volRvol ?? 1)}`
+                  : undefined
+              }
+              color={
+                lastValues.volRvol !== undefined && lastValues.volRvol >= 1.2
+                  ? TV_COLORS.green
+                  : lastValues.volRvol !== undefined && lastValues.volRvol < 0.7
+                    ? TV_COLORS.textMuted
+                    : INDICATOR_COLORS.volume
+              }
               hidden={hidden.volume}
               onToggleHide={() => toggleHidden("volume")}
               onSettings={() => setSettingsTarget("volume")}
