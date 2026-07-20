@@ -22,6 +22,7 @@ import {
 import { fetchKlines } from "@/lib/binance/rest";
 import { fetchBitgetKlines } from "@/lib/exchanges/bitget";
 import { fetchFuturesKlines } from "@/lib/exchanges/binance-futures";
+import { getBitgetWS } from "@/lib/exchanges/bitget-ws";
 import { getBinanceWS, getBinanceFuturesWS } from "@/lib/binance/ws";
 import { aggregate2m, makeTwoMinuteAggregator } from "@/lib/aggregate";
 import {
@@ -2647,14 +2648,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     // Bitget is REST-only, so "live" means polling every few seconds. For the
     // Binance venues the WS is primary and this only fires if it goes quiet.
-    // Bitget has no kline WebSocket, so poll it hard (~1s) to keep the chart
-    // live. Binance streams over WS, so its watchdog only fires if the socket
-    // goes silent.
-    const STALE_MS = exchange === "bitget" ? 1_000 : 20_000;
+    // Bitget's live price rides its ticker WebSocket, so REST only needs to
+    // fire every ~3s for structure (new bars, volume, exact OHLC). Binance
+    // streams over WS, so its watchdog only fires if the socket goes silent.
+    const STALE_MS = exchange === "bitget" ? 3_000 : 20_000;
     const watchdog = setInterval(() => {
       if (document.hidden) return; // don't burn requests in background tabs
       if (Date.now() - lastTick > STALE_MS) void resync();
-    }, exchange === "bitget" ? 1_000 : 8_000);
+    }, exchange === "bitget" ? 3_000 : 8_000);
 
     // Waking the tab or regaining network = deep catch-up to fill any gap.
     const onWake = () => {
@@ -2683,8 +2684,35 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         }
 
         // Live candles via WebSocket — spot and futures share the protocol;
-        // Bitget has no public multiplexed kline stream, so it polls (above).
-        if (exchange === "bitget") return;
+        // Bitget has no kline WebSocket, but its ticker WebSocket pushes the
+        // last price in real time (~0.35s). Ride that to keep the forming candle
+        // live between the REST resyncs that fix full OHLC and add new bars.
+        if (exchange === "bitget") {
+          const bws = getBitgetWS();
+          unsub = bws.subscribeTickers([symbol], (t) => {
+            const arr = candlesRef.current;
+            const lastCandle = arr[arr.length - 1];
+            if (!candleSeriesRef.current || !lastCandle) return;
+            // Note: deliberately NOT resetting lastTick — the REST watchdog must
+            // still fire to create new bars and correct volume/OHLC.
+            lastCandle.close = t.lastPrice;
+            lastCandle.high = Math.max(lastCandle.high, t.lastPrice);
+            lastCandle.low = Math.min(lastCandle.low, t.lastPrice);
+            candleSeriesRef.current.update({
+              time: lastCandle.time as UTCTimestamp,
+              open: lastCandle.open,
+              high: lastCandle.high,
+              low: lastCandle.low,
+              close: lastCandle.close,
+            });
+            const prev = arr[arr.length - 2] ?? lastCandle;
+            setLastPrice({
+              value: t.lastPrice,
+              pct: prev.close === 0 ? 0 : ((t.lastPrice - prev.close) / prev.close) * 100,
+            });
+          });
+          return;
+        }
         const ws = exchange === "binancef" ? getBinanceFuturesWS() : getBinanceWS();
         const handleCandle = (k: Candle) => {
             if (!candleSeriesRef.current) return;

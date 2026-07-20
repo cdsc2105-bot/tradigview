@@ -5,6 +5,7 @@ import { ChevronDown, Plus, X } from "lucide-react";
 import { fetchTickers24h } from "@/lib/binance/rest";
 import { fetchBitgetTickers } from "@/lib/exchanges/bitget";
 import { fetchFuturesTickers } from "@/lib/exchanges/binance-futures";
+import { getBitgetWS } from "@/lib/exchanges/bitget-ws";
 import { fetchSupportedSymbols } from "@/lib/exchanges/symbols";
 import { getBinanceWS, getBinanceFuturesWS } from "@/lib/binance/ws";
 import { useChartStore, type Exchange } from "@/lib/store/chart-store";
@@ -173,34 +174,49 @@ export function Watchlist() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [futuresKey]);
 
-  // Bitget: poll every 1s (no public multiplexed mini-ticker stream)
+  // Bitget: one REST snapshot for instant data, then real-time WebSocket ticks
+  // (sub-second, ~0.35s) instead of polling.
   useEffect(() => {
     if (bitgetSymbols.length === 0) return;
     let cancelled = false;
 
-    const load = () => {
-      fetchBitgetTickers(bitgetSymbols)
-        .then((tickers) => {
-          if (cancelled) return;
-          setRows((prev) => {
-            const next = { ...prev };
-            tickers.forEach((t) => {
-              next[rk("bitget", t.symbol)] = {
-                price: t.lastPrice,
-                pct: t.priceChangePercent,
-              };
-            });
-            return next;
+    fetchBitgetTickers(bitgetSymbols)
+      .then((tickers) => {
+        if (cancelled) return;
+        setRows((prev) => {
+          const next = { ...prev };
+          tickers.forEach((t) => {
+            next[rk("bitget", t.symbol)] = {
+              price: t.lastPrice,
+              pct: t.priceChangePercent,
+            };
           });
-        })
-        .catch(console.error);
-    };
+          return next;
+        });
+      })
+      .catch(console.error);
 
-    load();
-    const id = setInterval(load, 1000);
+    const ws = getBitgetWS();
+    const unsub = ws.subscribeTickers(bitgetSymbols, (t) => {
+      const key = rk("bitget", t.symbol);
+      setRows((prev) => {
+        const prevRow = prev[key];
+        if (prevRow) {
+          if (t.lastPrice > prevRow.price) {
+            setFlash((f) => ({ ...f, [key]: "up" }));
+            setTimeout(() => setFlash((f) => ({ ...f, [key]: null })), 300);
+          } else if (t.lastPrice < prevRow.price) {
+            setFlash((f) => ({ ...f, [key]: "down" }));
+            setTimeout(() => setFlash((f) => ({ ...f, [key]: null })), 300);
+          }
+        }
+        return { ...prev, [key]: { price: t.lastPrice, pct: t.priceChangePercent } };
+      });
+    });
+
     return () => {
       cancelled = true;
-      clearInterval(id);
+      unsub();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bitgetKey]);
