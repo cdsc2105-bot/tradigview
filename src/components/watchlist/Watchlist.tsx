@@ -173,7 +173,7 @@ export function Watchlist() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [futuresKey]);
 
-  // Bitget: poll every 3s (no public multiplexed mini-ticker stream)
+  // Bitget: poll every 1s (no public multiplexed mini-ticker stream)
   useEffect(() => {
     if (bitgetSymbols.length === 0) return;
     let cancelled = false;
@@ -197,7 +197,7 @@ export function Watchlist() {
     };
 
     load();
-    const id = setInterval(load, 3000);
+    const id = setInterval(load, 1000);
     return () => {
       cancelled = true;
       clearInterval(id);

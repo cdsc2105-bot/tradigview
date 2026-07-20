@@ -2608,12 +2608,16 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     let lastTick = Date.now();
     let resyncing = false;
 
-    /** Refetch the most recent candles and splice them over the loaded tail. */
-    async function resync() {
+    /**
+     * Refetch recent candles and splice them over the loaded tail.
+     * `deep` pulls a big window (wake-from-sleep / initial-failure recovery);
+     * routine live polls stay light so a 1s Bitget cadence isn't heavy.
+     */
+    async function resync(deep = false) {
       if (cancelled || resyncing || fetchingOlder) return;
       resyncing = true;
       try {
-        const fresh = await fetchCandles(exchange, symbol, timeframe, 300);
+        const fresh = await fetchCandles(exchange, symbol, timeframe, deep ? 500 : 90);
         if (cancelled || fresh.length === 0) return;
 
         const hadData = candlesRef.current.length > 0;
@@ -2643,15 +2647,18 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     // Bitget is REST-only, so "live" means polling every few seconds. For the
     // Binance venues the WS is primary and this only fires if it goes quiet.
-    const STALE_MS = exchange === "bitget" ? 4_000 : 30_000;
+    // Bitget has no kline WebSocket, so poll it hard (~1s) to keep the chart
+    // live. Binance streams over WS, so its watchdog only fires if the socket
+    // goes silent.
+    const STALE_MS = exchange === "bitget" ? 1_000 : 20_000;
     const watchdog = setInterval(() => {
       if (document.hidden) return; // don't burn requests in background tabs
       if (Date.now() - lastTick > STALE_MS) void resync();
-    }, exchange === "bitget" ? 5_000 : 10_000);
+    }, exchange === "bitget" ? 1_000 : 8_000);
 
-    // Waking the tab or regaining network = catch up immediately.
+    // Waking the tab or regaining network = deep catch-up to fill any gap.
     const onWake = () => {
-      if (!document.hidden) void resync();
+      if (!document.hidden) void resync(true);
     };
     document.addEventListener("visibilitychange", onWake);
     window.addEventListener("online", onWake);
