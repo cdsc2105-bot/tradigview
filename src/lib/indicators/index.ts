@@ -602,6 +602,287 @@ export function waveTrend(
 }
 
 // ---------------------------------------------------------------------------
+// VuManChu Cipher B + Divergences  (port of the open-source Pine v4 script)
+// ---------------------------------------------------------------------------
+
+export interface CipherPoint {
+  time: number;
+  /** WaveTrend fast wave */
+  wt1: number;
+  /** WaveTrend slow/signal wave */
+  wt2: number;
+  /** Fast WT = wt1 − wt2 (the "VWAP" area) */
+  vwap: number;
+  /** RSI+MFI money-flow area value */
+  rsiMfi: number;
+}
+
+export type CipherSignalKind =
+  | "buy" // big green circle — WT cross up while oversold
+  | "sell" // big red circle — WT cross down while overbought
+  | "gold" // gold buy — strong bullish setup
+  | "crossUp" // small green dot at a WT cross up
+  | "crossDown" // small red dot at a WT cross down
+  | "bullDiv" // WT bullish divergence dot
+  | "bearDiv"; // WT bearish divergence dot
+
+export interface CipherSignal {
+  time: number;
+  kind: CipherSignalKind;
+  /** y position to draw at (wt2 of the bar) */
+  value: number;
+}
+
+export interface CipherOptions {
+  channelLen: number; // 9
+  averageLen: number; // 12
+  maLen: number; // 3
+  obLevel: number; // 53
+  osLevel: number; // -53
+  osLevel3: number; // -75
+  mfiPeriod: number; // 60
+  mfiMultiplier: number; // 600 (user setting)
+  mfiPosY: number; // 2.5
+  divOB: number; // 45  WT bearish div min
+  divOS: number; // -65 WT bullish div min
+  divOBadd: number; // 15  2nd bearish div
+  divOSadd: number; // -40 2nd bullish div
+  rsiLen: number; // 14 (for the gold-buy RSI check)
+}
+
+export const CIPHER_DEFAULTS: CipherOptions = {
+  channelLen: 9,
+  averageLen: 12,
+  maLen: 3,
+  obLevel: 53,
+  osLevel: -53,
+  osLevel3: -75,
+  mfiPeriod: 60,
+  mfiMultiplier: 600,
+  mfiPosY: 2.5,
+  divOB: 45,
+  divOS: -65,
+  divOBadd: 15,
+  divOSadd: -40,
+  rsiLen: 14,
+};
+
+export interface CipherResult {
+  points: CipherPoint[];
+  signals: CipherSignal[];
+}
+
+/** EMA over a numeric array, seeded with the SMA of the first `period` values. */
+function emaArray(src: number[], period: number): number[] {
+  const out = new Array<number>(src.length).fill(NaN);
+  if (src.length < period) return out;
+  const k = 2 / (period + 1);
+  let prev = 0;
+  for (let i = 0; i < period; i++) prev += src[i];
+  prev /= period;
+  out[period - 1] = prev;
+  for (let i = period; i < src.length; i++) {
+    prev = src[i] * k + prev * (1 - k);
+    out[i] = prev;
+  }
+  return out;
+}
+
+/** SMA over a numeric array (NaN until the first full window). */
+function smaArray(src: number[], period: number): number[] {
+  const out = new Array<number>(src.length).fill(NaN);
+  let sum = 0;
+  let count = 0;
+  for (let i = 0; i < src.length; i++) {
+    const v = src[i];
+    if (!isNaN(v)) {
+      sum += v;
+      count++;
+    }
+    if (i >= period) {
+      const drop = src[i - period];
+      if (!isNaN(drop)) {
+        sum -= drop;
+        count--;
+      }
+    }
+    if (i >= period - 1 && count === period) out[i] = sum / period;
+  }
+  return out;
+}
+
+/**
+ * VuManChu Cipher B: WaveTrend waves, fast-wave VWAP, RSI+MFI area, plus the
+ * buy/sell/gold circles and regular WT/RSI divergence dots — the pane exactly
+ * as the open-source script draws it with the user's enabled settings.
+ */
+export function cipherB(
+  candles: Candle[],
+  opts: CipherOptions = CIPHER_DEFAULTS,
+): CipherResult {
+  const n = candles.length;
+  if (n === 0) return { points: [], signals: [] };
+
+  const { channelLen, averageLen, maLen } = opts;
+
+  // --- WaveTrend (full-length arrays so per-bar crosses are easy) ---
+  const hlc3 = new Array<number>(n);
+  for (let i = 0; i < n; i++)
+    hlc3[i] = (candles[i].high + candles[i].low + candles[i].close) / 3;
+
+  const esa = emaArray(hlc3, channelLen);
+  // Zero (not NaN) in the warm-up region so the EMA seed isn't poisoned — same
+  // as the existing waveTrend(); the first few bars are warm-up and scroll off.
+  const absDiff = new Array<number>(n).fill(0);
+  for (let i = 0; i < n; i++)
+    if (!isNaN(esa[i])) absDiff[i] = Math.abs(hlc3[i] - esa[i]);
+  const de = emaArray(absDiff, channelLen);
+
+  const ci = new Array<number>(n).fill(NaN);
+  for (let i = 0; i < n; i++) {
+    if (isNaN(esa[i]) || isNaN(de[i])) continue;
+    ci[i] = de[i] === 0 ? 0 : (hlc3[i] - esa[i]) / (0.015 * de[i]);
+  }
+
+  const wt1 = emaArray(
+    ci.map((x) => (isNaN(x) ? 0 : x)),
+    averageLen,
+  );
+  // Blank wt1 where ci wasn't valid yet
+  for (let i = 0; i < n; i++) if (isNaN(ci[i])) wt1[i] = NaN;
+  const wt2 = smaArray(wt1, maLen);
+
+  // --- RSI+MFI money-flow area ---
+  const mf = new Array<number>(n).fill(NaN);
+  for (let i = 0; i < n; i++) {
+    const range = candles[i].high - candles[i].low;
+    mf[i] = range === 0 ? 0 : ((candles[i].close - candles[i].open) / range) * opts.mfiMultiplier;
+  }
+  const mfSma = smaArray(mf, opts.mfiPeriod);
+  const rsiMfi = mfSma.map((v) => (isNaN(v) ? NaN : v - opts.mfiPosY));
+
+  // --- RSI (for the gold-buy check) ---
+  const rsiPts = rsi(candles, opts.rsiLen);
+  const rsiByTime = new Map(rsiPts.map((p) => [p.time, p.value]));
+
+  // --- Assemble points where wt1 & wt2 are valid ---
+  const points: CipherPoint[] = [];
+  for (let i = 0; i < n; i++) {
+    if (isNaN(wt1[i]) || isNaN(wt2[i])) continue;
+    points.push({
+      time: candles[i].time,
+      wt1: wt1[i],
+      wt2: wt2[i],
+      vwap: wt1[i] - wt2[i],
+      rsiMfi: isNaN(rsiMfi[i]) ? 0 : rsiMfi[i],
+    });
+  }
+
+  // --- Signals: crosses, buy/sell, gold, divergences ---
+  const signals: CipherSignal[] = [];
+
+  // Fractal divergences on wt2 (regular only, matching the enabled settings).
+  // A top/bottom fractal sits 2 bars back: needs src[i-4..i].
+  const isTopFractal = (i: number) =>
+    i >= 4 &&
+    !isNaN(wt2[i - 4]) &&
+    wt2[i - 4] < wt2[i - 2] &&
+    wt2[i - 3] < wt2[i - 2] &&
+    wt2[i - 2] > wt2[i - 1] &&
+    wt2[i - 2] > wt2[i];
+  const isBotFractal = (i: number) =>
+    i >= 4 &&
+    !isNaN(wt2[i - 4]) &&
+    wt2[i - 4] > wt2[i - 2] &&
+    wt2[i - 3] > wt2[i - 2] &&
+    wt2[i - 2] < wt2[i - 1] &&
+    wt2[i - 2] < wt2[i];
+
+  let prevTopOsc: number | null = null;
+  let prevTopHigh: number | null = null;
+  let prevBotOsc: number | null = null;
+  let prevBotLow: number | null = null;
+  let prevBotWt: number | null = null; // wtLow_prev for gold buy
+
+  for (let i = 0; i < n; i++) {
+    if (isNaN(wt1[i]) || isNaN(wt2[i]) || i < 1 || isNaN(wt1[i - 1]) || isNaN(wt2[i - 1]))
+      continue;
+
+    // Cross of wt1 and wt2 on this bar
+    const crossed =
+      (wt1[i - 1] - wt2[i - 1]) * (wt1[i] - wt2[i]) < 0 ||
+      (wt1[i] === wt2[i] && wt1[i - 1] !== wt2[i - 1]);
+    const crossUp = wt2[i] - wt1[i] <= 0; // wt1 above wt2
+    const oversold = wt2[i] <= opts.osLevel;
+    const overbought = wt2[i] >= opts.obLevel;
+
+    // Divergence detection at the confirmed fractal (2 bars back)
+    let bullDiv = false;
+    let bearDiv = false;
+    if (isTopFractal(i)) {
+      const osc = wt2[i - 2];
+      const hi = candles[i - 2].high;
+      if (
+        prevTopHigh !== null &&
+        prevTopOsc !== null &&
+        osc >= opts.divOB &&
+        hi > prevTopHigh &&
+        osc < prevTopOsc
+      ) {
+        bearDiv = true;
+      }
+      prevTopOsc = osc;
+      prevTopHigh = hi;
+    }
+    if (isBotFractal(i)) {
+      const osc = wt2[i - 2];
+      const lo = candles[i - 2].low;
+      if (
+        prevBotLow !== null &&
+        prevBotOsc !== null &&
+        osc <= opts.divOS &&
+        lo < prevBotLow &&
+        osc > prevBotOsc
+      ) {
+        bullDiv = true;
+      }
+      // Gold buy uses the previous bottom fractal's osc value + its rsi
+      const goldOk =
+        prevBotWt !== null &&
+        prevBotWt <= opts.osLevel3 &&
+        wt2[i] > opts.osLevel3 &&
+        prevBotWt - wt2[i] <= -5 &&
+        (rsiByTime.get(candles[i - 2].time) ?? 100) < 30;
+      if (bullDiv && goldOk) {
+        signals.push({ time: candles[i].time, kind: "gold", value: wt2[i] });
+      }
+      prevBotOsc = osc;
+      prevBotLow = lo;
+      prevBotWt = osc;
+    }
+
+    if (bullDiv) signals.push({ time: candles[i - 2].time, kind: "bullDiv", value: wt2[i - 2] });
+    if (bearDiv) signals.push({ time: candles[i - 2].time, kind: "bearDiv", value: wt2[i - 2] });
+
+    if (crossed) {
+      if (crossUp && oversold) {
+        signals.push({ time: candles[i].time, kind: "buy", value: wt2[i] });
+      } else if (!crossUp && overbought) {
+        signals.push({ time: candles[i].time, kind: "sell", value: wt2[i] });
+      } else {
+        signals.push({
+          time: candles[i].time,
+          kind: crossUp ? "crossUp" : "crossDown",
+          value: wt2[i],
+        });
+      }
+    }
+  }
+
+  return { points, signals };
+}
+
+// ---------------------------------------------------------------------------
 // Ichimoku Kinko Hyo (Ichimoku Cloud)
 // ---------------------------------------------------------------------------
 

@@ -97,6 +97,13 @@ const ENTRIES: Entry[] = [
     keywords: "wavetrend cipher wt oscilador momentum ondas",
   },
   {
+    key: "cipher",
+    group: "Osciladores",
+    label: () => "VuManChu Cipher B",
+    desc: "Cipher B completo: WaveTrend, VWAP, MFI, círculos de compra/venta/oro y divergencias.",
+    keywords: "cipher b vumanchu market cipher wavetrend mfi vwap circulos oro compra venta divergencias",
+  },
+  {
     key: "bb",
     group: "Bandas",
     label: (c) => `Bollinger (${c.bbPeriod}, ${c.bbStdDev})`,

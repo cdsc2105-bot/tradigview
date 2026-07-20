@@ -35,6 +35,7 @@ const TITLES: Record<IndicatorKey, string> = {
   ichimoku: "Ichimoku",
   session: "Sesión de Nueva York",
   stochrsi: "Estocástico RSI",
+  cipher: "VuManChu Cipher B",
 };
 
 export function IndicatorSettingsDialog() {

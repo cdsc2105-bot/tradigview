@@ -28,7 +28,8 @@ export type IndicatorKey =
   | "ribbon"
   | "ichimoku"
   | "session"
-  | "stochrsi";
+  | "stochrsi"
+  | "cipher";
 
 export type DrawingTool = "cursor" | "hline" | "trend" | "measure" | "eraser";
 
@@ -231,7 +232,22 @@ export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
   ribbon: "#22d3ee",
   ichimoku: "#26a69a",
   session: "#2962ff",
+  cipher: "#4994ec",
 };
+
+/** VuManChu Cipher B palette, from the open-source script. */
+export const CIPHER_COLORS = {
+  wt1: "#4994ec", // fast wave — blue
+  wt2: "#1f1559", // slow wave — dark purple
+  vwap: "#ffffff", // fast WT area — white
+  mfiUp: "#3ee145", // money flow > 0 — green
+  mfiDown: "#ff3d2e", // money flow < 0 — red
+  buy: "#00e676", // WT cross up dot
+  sell: "#ff5252", // WT cross down dot
+  gold: "#e2a400", // gold buy
+  bullDiv: "#00e676",
+  bearDiv: "#e60000",
+} as const;
 
 /** TradingView oscillator styling shared by both stochastic panes. */
 export const STOCH_COLORS = {
@@ -408,6 +424,7 @@ export const useChartStore = create<ChartState>()(
         ichimoku: false,
         session: true,
         stochrsi: false,
+        cipher: false,
       },
       hidden: {
         ema20: false,
@@ -425,6 +442,7 @@ export const useChartStore = create<ChartState>()(
         ichimoku: false,
         session: false,
         stochrsi: false,
+        cipher: false,
       },
       config: {
         ...DEFAULT_CONFIG,

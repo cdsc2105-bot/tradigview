@@ -7,6 +7,7 @@ import {
   CandlestickSeries,
   LineSeries,
   HistogramSeries,
+  BaselineSeries,
   CrosshairMode,
   type AutoscaleInfo,
   type IChartApi,
@@ -14,6 +15,7 @@ import {
   type ISeriesMarkersPluginApi,
   type IPriceLine,
   type LineWidth,
+  type SeriesMarker,
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
@@ -35,12 +37,16 @@ import {
   vwap,
   waveTrend,
   ichimoku,
+  cipherB,
+  CIPHER_DEFAULTS,
+  type CipherSignalKind,
 } from "@/lib/indicators";
 import type { Candle, Timeframe } from "@/lib/binance/types";
 import {
   EXCHANGE_LABELS,
   INDICATOR_COLORS,
   ICHIMOKU_COLORS,
+  CIPHER_COLORS,
   RSI_COLORS,
   SESSION_COLORS,
   STOCH_COLORS,
@@ -109,11 +115,13 @@ const VOL_MA_PERIOD = 21;
  */
 function volBarColor(isUp: boolean, rvol: number): string {
   const hue = isUp ? TV_COLORS.green : TV_COLORS.red;
+  // Kept semi-transparent so even climax bars sit behind the candles rather
+  // than fighting them — still readable by relative intensity.
   const alpha =
-    rvol >= 2 ? "e6" : // climax — near solid
-    rvol >= 1.2 ? "b3" : // high
-    rvol >= 0.7 ? "66" : // normal
-    "30"; // low — faded
+    rvol >= 2 ? "aa" : // climax
+    rvol >= 1.2 ? "80" : // high
+    rvol >= 0.7 ? "4d" : // normal
+    "26"; // low — faded
   return `${hue}${alpha}`;
 }
 
@@ -232,6 +240,8 @@ interface LastValues {
   vwapVal?: number;
   wt1?: number;
   wt2?: number;
+  cipherWt1?: number;
+  cipherWt2?: number;
   /** Last value of each EMA ribbon line, fast → slow */
   ribbon?: (number | undefined)[];
   /** Ichimoku cloud bias from the last Senkou A vs B */
@@ -294,6 +304,15 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const wt1Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const wt2Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const wt0Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  // VuManChu Cipher B pane series
+  const cipherWt1Ref = useRef<ISeriesApi<"Baseline"> | null>(null);
+  const cipherWt2Ref = useRef<ISeriesApi<"Baseline"> | null>(null);
+  const cipherVwapRef = useRef<ISeriesApi<"Baseline"> | null>(null);
+  const cipherMfiRef = useRef<ISeriesApi<"Baseline"> | null>(null);
+  const cipherObRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const cipherOsRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const cipher0Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const cipherMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   /** One line series per configured ribbon EMA, fast → slow */
   const ribbonRefs = useRef<ISeriesApi<"Line">[]>([]);
   const ribbonFillRef = useRef<BandFillPrimitive | null>(null);
@@ -735,8 +754,9 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         },
         0,
       );
-      // Volume gets the bottom ~26% of the price pane.
-      v.priceScale().applyOptions({ scaleMargins: { top: 0.74, bottom: 0 } });
+      // Volume lives in a thin strip at the very bottom (~15%) so it never
+      // reaches up into the candles and clutters the price action.
+      v.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
       volumeSeriesRef.current = v;
       // Volume moving-average line (red), on the same volume price scale
       volumeMaRef.current = chartRef.current.addSeries(
@@ -1193,6 +1213,108 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [indicators.wavetrend, indicators.rsi, indicators.macd, indicators.stoch, indicators.stochrsi]);
 
+  // VuManChu Cipher B pane — WT areas + fast-wave VWAP + RSI/MFI area + circles
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (indicators.cipher && !cipherWt2Ref.current) {
+      const paneIndex =
+        1 +
+        (indicators.rsi ? 1 : 0) +
+        (indicators.macd ? 1 : 0) +
+        (indicators.stoch ? 1 : 0) +
+        (indicators.stochrsi ? 1 : 0) +
+        (indicators.wavetrend ? 1 : 0);
+
+      const baseline = (top: string, bottom: string, lineColor: string) =>
+        chart.addSeries(
+          BaselineSeries,
+          {
+            baseValue: { type: "price", price: 0 },
+            topLineColor: lineColor,
+            bottomLineColor: lineColor,
+            topFillColor1: top,
+            topFillColor2: top,
+            bottomFillColor1: bottom,
+            bottomFillColor2: bottom,
+            lineWidth: 1,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          },
+          paneIndex,
+        );
+
+      // Draw order: WT2 (purple, widest) under WT1 (blue), then fast-wave + MFI.
+      cipherWt2Ref.current = baseline(
+        hexToRgba(CIPHER_COLORS.wt2, 55),
+        hexToRgba(CIPHER_COLORS.wt2, 55),
+        hexToRgba(CIPHER_COLORS.wt2, 0),
+      );
+      cipherWt1Ref.current = baseline(
+        hexToRgba(CIPHER_COLORS.wt1, 45),
+        hexToRgba(CIPHER_COLORS.wt1, 45),
+        hexToRgba(CIPHER_COLORS.wt1, 0),
+      );
+      cipherVwapRef.current = baseline(
+        hexToRgba(CIPHER_COLORS.vwap, 30),
+        hexToRgba(CIPHER_COLORS.vwap, 30),
+        hexToRgba(CIPHER_COLORS.vwap, 55),
+      );
+      cipherMfiRef.current = baseline(
+        hexToRgba(CIPHER_COLORS.mfiUp, 50),
+        hexToRgba(CIPHER_COLORS.mfiDown, 50),
+        hexToRgba(CIPHER_COLORS.mfiUp, 0),
+      );
+
+      const guide = (level: number, color: string, style = 2) =>
+        chart.addSeries(
+          LineSeries,
+          {
+            color,
+            lineWidth: 1,
+            lineStyle: style,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          },
+          paneIndex,
+        );
+      cipher0Ref.current = guide(0, hexToRgba("#ffffff", 25));
+      cipherObRef.current = guide(CIPHER_DEFAULTS.obLevel, hexToRgba("#ffffff", 15));
+      cipherOsRef.current = guide(CIPHER_DEFAULTS.osLevel, hexToRgba("#ffffff", 15));
+
+      cipherMarkersRef.current = createSeriesMarkers(cipherWt2Ref.current, []);
+
+      try {
+        chart.panes()[paneIndex]?.setStretchFactor(1);
+        chart.panes()[0]?.setStretchFactor(3);
+      } catch {}
+      updateCipher();
+    } else if (!indicators.cipher && cipherWt2Ref.current && chart) {
+      [
+        cipherWt1Ref,
+        cipherWt2Ref,
+        cipherVwapRef,
+        cipherMfiRef,
+        cipherObRef,
+        cipherOsRef,
+        cipher0Ref,
+      ].forEach((r) => {
+        if (r.current) chart.removeSeries(r.current);
+        r.current = null;
+      });
+      cipherMarkersRef.current = null;
+    }
+    requestAnimationFrame(() => recomputePaneOffsets());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    indicators.cipher,
+    indicators.rsi,
+    indicators.macd,
+    indicators.stoch,
+    indicators.stochrsi,
+    indicators.wavetrend,
+  ]);
+
   // Visibility — eye toggle (hidden state) + enabled state combined
   useEffect(() => {
     const v = (key: IndicatorKey) => indicators[key] && !hidden[key];
@@ -1239,6 +1361,20 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (wt1Ref.current) wt1Ref.current.applyOptions({ visible: v("wavetrend") });
     if (wt2Ref.current) wt2Ref.current.applyOptions({ visible: v("wavetrend") });
     if (wt0Ref.current) wt0Ref.current.applyOptions({ visible: v("wavetrend") });
+    if (cipherWt2Ref.current) {
+      const vis = v("cipher");
+      [
+        cipherWt1Ref,
+        cipherWt2Ref,
+        cipherVwapRef,
+        cipherMfiRef,
+        cipherObRef,
+        cipherOsRef,
+        cipher0Ref,
+      ].forEach((r) => r.current?.applyOptions({ visible: vis }));
+      if (vis) updateCipher();
+      else cipherMarkersRef.current?.setMarkers([]);
+    }
     if (ichiTenkanRef.current) {
       const vis = v("ichimoku");
       ichiTenkanRef.current.applyOptions({ visible: vis });
@@ -1589,6 +1725,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       const stochI = 1 + (ind.rsi ? 1 : 0) + (ind.macd ? 1 : 0);
       const srsiI = stochI + (ind.stoch ? 1 : 0);
       const wtI = srsiI + (ind.stochrsi ? 1 : 0);
+      const cipherI = wtI + (ind.wavetrend ? 1 : 0);
 
       let key: IndicatorKey | null = null;
       if (ind.rsi && idx === rsiI) key = "rsi";
@@ -1596,6 +1733,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       else if (ind.stoch && idx === stochI) key = "stoch";
       else if (ind.stochrsi && idx === srsiI) key = "stochrsi";
       else if (ind.wavetrend && idx === wtI) key = "wavetrend";
+      else if (ind.cipher && idx === cipherI) key = "cipher";
       if (key) toggleMaximizedPaneRef.current(key);
     };
 
@@ -2298,6 +2436,84 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     setLastValues((prev) => ({ ...prev, wt1: last?.wt1, wt2: last?.wt2 }));
   }
 
+  /** Marker shape/color/size per Cipher B signal, matching the script. */
+  const CIPHER_MARKER: Record<
+    CipherSignalKind,
+    { color: string; position: "aboveBar" | "belowBar" | "inBar"; size: number }
+  > = {
+    buy: { color: CIPHER_COLORS.buy, position: "belowBar", size: 2 },
+    sell: { color: CIPHER_COLORS.sell, position: "aboveBar", size: 2 },
+    gold: { color: CIPHER_COLORS.gold, position: "belowBar", size: 2 },
+    crossUp: { color: CIPHER_COLORS.buy, position: "inBar", size: 0 },
+    crossDown: { color: CIPHER_COLORS.sell, position: "inBar", size: 0 },
+    bullDiv: { color: CIPHER_COLORS.bullDiv, position: "belowBar", size: 1 },
+    bearDiv: { color: CIPHER_COLORS.bearDiv, position: "aboveBar", size: 1 },
+  };
+
+  function updateCipher() {
+    const c = candlesRef.current;
+    if (c.length === 0 || !cipherWt2Ref.current) return;
+    const { points, signals } = cipherB(c, CIPHER_DEFAULTS);
+    if (points.length === 0) return;
+
+    const at = (sel: (p: (typeof points)[number]) => number) =>
+      points.map((p) => ({ time: p.time as UTCTimestamp, value: sel(p) }));
+
+    cipherWt2Ref.current.setData(at((p) => p.wt2));
+    cipherWt1Ref.current?.setData(at((p) => p.wt1));
+    cipherVwapRef.current?.setData(at((p) => p.vwap));
+    cipherMfiRef.current?.setData(at((p) => p.rsiMfi));
+
+    const first = points[0].time as UTCTimestamp;
+    const lastT = points[points.length - 1].time as UTCTimestamp;
+    cipher0Ref.current?.setData([
+      { time: first, value: 0 },
+      { time: lastT, value: 0 },
+    ]);
+    cipherObRef.current?.setData([
+      { time: first, value: CIPHER_DEFAULTS.obLevel },
+      { time: lastT, value: CIPHER_DEFAULTS.obLevel },
+    ]);
+    cipherOsRef.current?.setData([
+      { time: first, value: CIPHER_DEFAULTS.osLevel },
+      { time: lastT, value: CIPHER_DEFAULTS.osLevel },
+    ]);
+
+    // One marker per bar: keep the highest-priority signal so they don't stack.
+    const priority: CipherSignalKind[] = [
+      "gold",
+      "buy",
+      "sell",
+      "bullDiv",
+      "bearDiv",
+      "crossUp",
+      "crossDown",
+    ];
+    const best = new Map<number, CipherSignalKind>();
+    for (const s of signals) {
+      const cur = best.get(s.time);
+      if (!cur || priority.indexOf(s.kind) < priority.indexOf(cur)) {
+        best.set(s.time, s.kind);
+      }
+    }
+    const markers: SeriesMarker<Time>[] = [...best.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([time, kind]) => {
+        const m = CIPHER_MARKER[kind];
+        return {
+          time: time as UTCTimestamp,
+          position: m.position,
+          shape: "circle" as const,
+          color: m.color,
+          size: m.size,
+        };
+      });
+    cipherMarkersRef.current?.setMarkers(markers);
+
+    const last = points[points.length - 1];
+    setLastValues((prev) => ({ ...prev, cipherWt1: last.wt1, cipherWt2: last.wt2 }));
+  }
+
   /** Push `candlesRef` into every series — candles, volume and all indicators. */
   function redrawAll() {
     const klines = candlesRef.current;
@@ -2321,6 +2537,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     updateSuperTrend();
     updateVWAP();
     updateWaveTrend();
+    updateCipher();
     updateIchimoku();
     updateSessionLines();
   }
@@ -2495,6 +2712,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             updateSuperTrend();
             updateVWAP();
             updateWaveTrend();
+            updateCipher();
             updateIchimoku();
             updateSessionLines();
             const prev = arr[arr.length - 2] ?? lastCandle;
@@ -2557,6 +2775,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const stochPaneIdx = 1 + (indicators.rsi ? 1 : 0) + (indicators.macd ? 1 : 0);
   const srsiPaneIdx = stochPaneIdx + (indicators.stoch ? 1 : 0);
   const wtPaneIdx = srsiPaneIdx + (indicators.stochrsi ? 1 : 0);
+  const cipherPaneIdx = wtPaneIdx + (indicators.wavetrend ? 1 : 0);
 
   // Blow one oscillator pane up big (like maximizing a pane in TradingView) by
   // re-weighting the stretch factors; toggling back restores the 3:1 layout.
@@ -2569,6 +2788,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       stoch: stochPaneIdx,
       stochrsi: srsiPaneIdx,
       wavetrend: wtPaneIdx,
+      cipher: cipherPaneIdx,
     };
     const maxIdx =
       maximizedPane && indicators[maximizedPane]
@@ -2591,11 +2811,13 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     indicators.stoch,
     indicators.stochrsi,
     indicators.wavetrend,
+    indicators.cipher,
     rsiPaneIdx,
     macdPaneIdx,
     stochPaneIdx,
     srsiPaneIdx,
     wtPaneIdx,
+    cipherPaneIdx,
   ]);
 
   let measureRender: React.ReactNode = null;
@@ -2974,6 +3196,30 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             onRemove={() => removeIndicator("wavetrend")}
             onMaximize={() => toggleMaximizedPane("wavetrend")}
             maximized={maximizedPane === "wavetrend"}
+          />
+        </div>
+      )}
+
+      {/* VuManChu Cipher B pane label */}
+      {indicators.cipher && paneOffsets[cipherPaneIdx] && (
+        <div
+          style={{ top: paneOffsets[cipherPaneIdx].top + 6, left: 12 }}
+          className="pointer-events-none absolute z-10"
+        >
+          <IndicatorPill
+            name="Cipher B"
+            value={
+              lastValues.cipherWt2 !== undefined
+                ? `WT ${lastValues.cipherWt2.toFixed(1)}`
+                : undefined
+            }
+            color={CIPHER_COLORS.wt1}
+            hidden={hidden.cipher}
+            onToggleHide={() => toggleHidden("cipher")}
+            onSettings={() => setSettingsTarget("cipher")}
+            onRemove={() => removeIndicator("cipher")}
+            onMaximize={() => toggleMaximizedPane("cipher")}
+            maximized={maximizedPane === "cipher"}
           />
         </div>
       )}
