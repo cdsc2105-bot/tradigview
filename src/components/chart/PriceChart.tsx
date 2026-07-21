@@ -23,6 +23,7 @@ import { fetchKlines } from "@/lib/binance/rest";
 import { fetchBitgetKlines } from "@/lib/exchanges/bitget";
 import { fetchFuturesKlines } from "@/lib/exchanges/binance-futures";
 import { getBitgetWS } from "@/lib/exchanges/bitget-ws";
+import { fetchStockKlines, stockLabel } from "@/lib/exchanges/stocks";
 import { getBinanceWS, getBinanceFuturesWS } from "@/lib/binance/ws";
 import { aggregate2m, makeTwoMinuteAggregator } from "@/lib/aggregate";
 import {
@@ -70,7 +71,7 @@ import {
   sessionLines,
 } from "@/components/chart/sessionLines";
 import { SegmentsPrimitive, type Segment } from "@/components/chart/segments";
-import { formatPrice, formatVolume } from "@/lib/format";
+import { formatPrice, formatVolume, priceFormatFor } from "@/lib/format";
 import { IndicatorPill } from "./IndicatorPill";
 import { MeasureOverlay } from "./MeasureOverlay";
 
@@ -158,6 +159,7 @@ const KLINE_FETCHERS: Record<
   binance: fetchKlines,
   binancef: fetchFuturesKlines,
   bitget: fetchBitgetKlines,
+  stocks: fetchStockKlines,
 };
 
 /**
@@ -327,6 +329,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const priceLinesMapRef = useRef<Map<string, IPriceLine>>(new Map());
   /** Set by the data effect; called when the view nears the oldest loaded bar. */
   const loadMoreRef = useRef<(() => void) | null>(null);
+  /** Decimals currently applied to the price axis (-1 = not set yet) */
+  const pricePrecisionRef = useRef(-1);
 
   const indicators = useChartStore((s) => s.indicators);
   const hidden = useChartStore((s) => s.hidden);
@@ -1130,6 +1134,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         s?.applyOptions({ color: band.color, visible: !hidden.vwap }),
       );
     });
+
+    // Newly created band series start at the default 2 decimals — force the
+    // symbol's precision back onto them.
+    const lastClose = candlesRef.current[candlesRef.current.length - 1]?.close;
+    if (lastClose !== undefined) {
+      pricePrecisionRef.current = -1;
+      applyPriceFormat(lastClose);
+    }
 
     updateVWAP();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2515,9 +2527,32 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     setLastValues((prev) => ({ ...prev, cipherWt1: last.wt1, cipherWt2: last.wt2 }));
   }
 
+  /**
+   * Match the axis decimals to the asset's price scale (BTC needs 2, ADA 4,
+   * PEPE 8). Guarded so it only reapplies when the precision actually changes.
+   */
+  function applyPriceFormat(lastClose: number) {
+    const fmt = priceFormatFor(lastClose);
+    if (fmt.precision === pricePrecisionRef.current) return;
+    pricePrecisionRef.current = fmt.precision;
+    const opts = {
+      priceFormat: {
+        type: "price" as const,
+        precision: fmt.precision,
+        minMove: fmt.minMove,
+      },
+    };
+    candleSeriesRef.current?.applyOptions(opts);
+    // Overlays that show their own price label need the same precision
+    vwapRef.current?.applyOptions(opts);
+    vwapBandRefs.current.forEach((s) => s.applyOptions(opts));
+  }
+
   /** Push `candlesRef` into every series — candles, volume and all indicators. */
   function redrawAll() {
     const klines = candlesRef.current;
+    const lastClose = klines[klines.length - 1]?.close;
+    if (lastClose !== undefined) applyPriceFormat(lastClose);
     candleSeriesRef.current?.setData(
       klines.map((k) => ({
         time: k.time as UTCTimestamp,
@@ -2935,7 +2970,9 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         {/* Row 1: symbol info + OHLC stats inline on hover (fixed height, never wraps) */}
         <div className="flex h-5 flex-nowrap items-center gap-x-3 overflow-hidden whitespace-nowrap">
           <div className="flex shrink-0 items-center gap-2 text-[13px] font-semibold">
-            <span className="text-tv-text">{symbol}</span>
+            <span className="text-tv-text">
+              {exchange === "stocks" ? stockLabel(symbol) : symbol}
+            </span>
             <span className="text-tv-text-muted">·</span>
             <span className="uppercase text-tv-text-muted">{timeframe}</span>
             <span className="text-tv-text-muted">·</span>

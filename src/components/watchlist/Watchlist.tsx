@@ -6,6 +6,7 @@ import { fetchTickers24h } from "@/lib/binance/rest";
 import { fetchBitgetTickers } from "@/lib/exchanges/bitget";
 import { fetchFuturesTickers } from "@/lib/exchanges/binance-futures";
 import { getBitgetWS } from "@/lib/exchanges/bitget-ws";
+import { fetchStockTickers, stockLabel } from "@/lib/exchanges/stocks";
 import { fetchSupportedSymbols } from "@/lib/exchanges/symbols";
 import { getBinanceWS, getBinanceFuturesWS } from "@/lib/binance/ws";
 import { useChartStore, type Exchange } from "@/lib/store/chart-store";
@@ -27,6 +28,7 @@ const SECTIONS: { key: Exchange; label: string; dot: string }[] = [
   { key: "binance", label: "Binance", dot: "bg-tv-yellow" },
   { key: "binancef", label: "Binance Perp", dot: "bg-tv-green" },
   { key: "bitget", label: "Bitget Perp", dot: "bg-tv-blue" },
+  { key: "stocks", label: "Acciones e índices", dot: "bg-tv-purple" },
 ];
 
 export function Watchlist() {
@@ -44,7 +46,7 @@ export function Watchlist() {
   const [collapsed, setCollapsed] = useState<Partial<Record<Exchange, boolean>>>({});
   const [supported, setSupported] = useState<
     Record<Exchange, Set<string> | null>
-  >({ binance: null, binancef: null, bitget: null });
+  >({ binance: null, binancef: null, bitget: null, stocks: null });
 
   // Which watchlist symbols each venue actually lists. Binance's batch ticker
   // endpoint 400s the whole request on a single unknown symbol, so this gate
@@ -72,15 +74,18 @@ export function Watchlist() {
       binance: pick("binance"),
       binancef: pick("binancef"),
       bitget: pick("bitget"),
+      stocks: pick("stocks"),
     };
   }, [watchlist, supported]);
 
   const binanceSymbols = listed.binance;
   const futuresSymbols = listed.binancef;
   const bitgetSymbols = listed.bitget;
+  const stockSymbols = listed.stocks;
   const binanceKey = binanceSymbols.join(",");
   const futuresKey = futuresSymbols.join(",");
   const bitgetKey = bitgetSymbols.join(",");
+  const stocksKey = stockSymbols.join(",");
 
   // Binance: REST snapshot + live WebSocket mini-tickers
   useEffect(() => {
@@ -221,6 +226,43 @@ export function Watchlist() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bitgetKey]);
 
+  // Stocks & indices: no free WebSocket, so poll. Equities move slower than
+  // crypto and Yahoo is rate-limited, so 5s is the sweet spot.
+  useEffect(() => {
+    if (stockSymbols.length === 0) return;
+    let cancelled = false;
+
+    const load = () => {
+      fetchStockTickers(stockSymbols)
+        .then((tickers) => {
+          if (cancelled) return;
+          setRows((prev) => {
+            const next = { ...prev };
+            tickers.forEach((t) => {
+              const key = rk("stocks", t.symbol);
+              const prevRow = prev[key];
+              if (prevRow && t.lastPrice !== prevRow.price) {
+                const dir = t.lastPrice > prevRow.price ? "up" : "down";
+                setFlash((f) => ({ ...f, [key]: dir }));
+                setTimeout(() => setFlash((f) => ({ ...f, [key]: null })), 300);
+              }
+              next[key] = { price: t.lastPrice, pct: t.priceChangePercent };
+            });
+            return next;
+          });
+        })
+        .catch(console.error);
+    };
+
+    load();
+    const id = setInterval(load, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stocksKey]);
+
   const select = (ex: Exchange, s: string) => {
     setExchange(ex);
     setSymbol(s);
@@ -311,9 +353,13 @@ export function Watchlist() {
                           <span className="h-3 w-0.5 rounded-full bg-tv-blue" />
                         )}
                         <span className="font-medium text-tv-text">
-                          {s.replace("USDT", "")}
+                          {section.key === "stocks"
+                            ? stockLabel(s)
+                            : s.replace("USDT", "")}
                         </span>
-                        <span className="text-[10px] text-tv-text-dim">USDT</span>
+                        {section.key !== "stocks" && (
+                          <span className="text-[10px] text-tv-text-dim">USDT</span>
+                        )}
                       </div>
                       <span
                         className={cn(

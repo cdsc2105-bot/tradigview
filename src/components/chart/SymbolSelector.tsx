@@ -11,6 +11,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { fetchSupportedSymbols } from "@/lib/exchanges/symbols";
+import { stockLabel } from "@/lib/exchanges/stocks";
 import {
   useChartStore,
   POPULAR_SYMBOLS,
@@ -22,6 +23,7 @@ const TABS: { key: Exchange; label: string }[] = [
   { key: "binance", label: "Binance" },
   { key: "binancef", label: "Binance Perp" },
   { key: "bitget", label: "Bitget Perp" },
+  { key: "stocks", label: "Acciones" },
 ];
 
 export function SymbolSelector() {
@@ -66,7 +68,15 @@ export function SymbolSelector() {
     const q = query.trim().toUpperCase();
 
     let result: string[];
-    if (!q) {
+    if (tab === "stocks") {
+      // Short curated list — show it whole, and match on the pretty name too
+      // so "nasdaq" finds ^IXIC.
+      result = q
+        ? list.filter(
+            (s) => s.includes(q) || stockLabel(s).toUpperCase().includes(q),
+          )
+        : list;
+    } else if (!q) {
       // No search: show only the well-known coins (in popularity order) that
       // this exchange actually lists — avoids the wall of obscure listings.
       const listSet = new Set(list);
@@ -85,8 +95,13 @@ export function SymbolSelector() {
 
     return result.slice(0, 100).map((s) => ({
       symbol: s,
-      baseAsset: s.endsWith("USDT") ? s.slice(0, -4) : s,
-      quoteAsset: s.endsWith("USDT") ? "USDT" : "",
+      baseAsset:
+        tab === "stocks"
+          ? stockLabel(s)
+          : s.endsWith("USDT")
+            ? s.slice(0, -4)
+            : s,
+      quoteAsset: tab === "stocks" ? "" : s.endsWith("USDT") ? "USDT" : "",
     }));
   }, [query, symbolsByExchange, tab]);
 

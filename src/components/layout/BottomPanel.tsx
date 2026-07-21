@@ -5,6 +5,7 @@ import { useChartStore, EXCHANGE_LABELS } from "@/lib/store/chart-store";
 import { fetchTicker24h } from "@/lib/binance/rest";
 import { fetchBitgetTicker } from "@/lib/exchanges/bitget";
 import { fetchFuturesTickers } from "@/lib/exchanges/binance-futures";
+import { fetchStockTickers, stockLabel } from "@/lib/exchanges/stocks";
 import type { Ticker24h } from "@/lib/binance/types";
 import { formatPrice, formatPct, formatVolume } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -23,7 +24,9 @@ export function BottomPanel() {
           ? fetchBitgetTicker(symbol)
           : exchange === "binancef"
             ? fetchFuturesTickers([symbol]).then((r) => r[0])
-            : fetchTicker24h(symbol);
+            : exchange === "stocks"
+              ? fetchStockTickers([symbol]).then((r) => r[0])
+              : fetchTicker24h(symbol);
       p.then((x) => {
         if (!cancelled && x) setT(x);
       }).catch(console.error);
@@ -40,7 +43,10 @@ export function BottomPanel() {
 
   return (
     <div className="flex h-9 shrink-0 items-center gap-0 overflow-x-auto border-t border-tv-border bg-tv-panel px-2 text-xs scrollbar-none md:px-3">
-      <Stat label="Símbolo" value={symbol} />
+      <Stat
+        label="Símbolo"
+        value={exchange === "stocks" ? stockLabel(symbol) : symbol}
+      />
       <Stat
         label="24h Cambio"
         value={t ? formatPct(t.priceChangePercent) : "—"}

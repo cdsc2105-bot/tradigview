@@ -3,14 +3,16 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Timeframe } from "@/lib/binance/types";
+import { STOCK_SYMBOLS } from "@/lib/exchanges/stocks";
 
-export type Exchange = "binance" | "binancef" | "bitget";
+export type Exchange = "binance" | "binancef" | "bitget" | "stocks";
 
 /** Display names — "binancef" is Binance's USDT-M perpetual futures. */
 export const EXCHANGE_LABELS: Record<Exchange, string> = {
   binance: "Binance",
   binancef: "Binance Perp",
   bitget: "Bitget Perp",
+  stocks: "Acciones e índices",
 };
 
 export type IndicatorKey =
@@ -292,6 +294,9 @@ export const DEFAULT_WATCHLIST = [
   "TRXUSDT",
   "HYPEUSDT",
   "SUIUSDT",
+  // Stocks & indices (served through /api/stocks). Each venue filters the
+  // watchlist against what it actually lists, so these only show under Acciones.
+  ...STOCK_SYMBOLS,
 ];
 
 /**
@@ -647,7 +652,8 @@ export const useChartStore = create<ChartState>()(
       // v3 turns on the double-stochastic bottom panes (Stoch RSI + Stoch).
       // v4 matches Matt's real TradingView bottom: RSI + Stochastic only.
       // v5 sets the RSI period to 7 (Matt's), so it dips deep into oversold.
-      version: 5,
+      // v6 adds stocks & indices to the watchlist.
+      version: 6,
       migrate: (persisted, version) => {
         const p = (persisted ?? {}) as Partial<ChartState>;
         let migrated =
