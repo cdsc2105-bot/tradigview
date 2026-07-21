@@ -615,6 +615,8 @@ export interface CipherPoint {
   vwap: number;
   /** RSI+MFI money-flow area value */
   rsiMfi: number;
+  /** Raw RSI (0–100), plotted right in the Cipher pane */
+  rsi: number;
 }
 
 export type CipherSignalKind =
@@ -631,6 +633,9 @@ export interface CipherSignal {
   kind: CipherSignalKind;
   /** y position to draw at (wt2 of the bar) */
   value: number;
+  /** Divergences only: the previous pivot, for the connecting line */
+  prevTime?: number;
+  prevValue?: number;
 }
 
 export interface CipherOptions {
@@ -775,6 +780,7 @@ export function cipherB(
       wt2: wt2[i],
       vwap: wt1[i] - wt2[i],
       rsiMfi: isNaN(rsiMfi[i]) ? 0 : rsiMfi[i],
+      rsi: rsiByTime.get(candles[i].time) ?? 50,
     });
   }
 
@@ -800,8 +806,10 @@ export function cipherB(
 
   let prevTopOsc: number | null = null;
   let prevTopHigh: number | null = null;
+  let prevTopTime: number | null = null;
   let prevBotOsc: number | null = null;
   let prevBotLow: number | null = null;
+  let prevBotTime: number | null = null;
   let prevBotWt: number | null = null; // wtLow_prev for gold buy
 
   for (let i = 0; i < n; i++) {
@@ -819,20 +827,25 @@ export function cipherB(
     // Divergence detection at the confirmed fractal (2 bars back)
     let bullDiv = false;
     let bearDiv = false;
+    let bearFrom: { t: number; v: number } | null = null;
+    let bullFrom: { t: number; v: number } | null = null;
     if (isTopFractal(i)) {
       const osc = wt2[i - 2];
       const hi = candles[i - 2].high;
       if (
         prevTopHigh !== null &&
         prevTopOsc !== null &&
+        prevTopTime !== null &&
         osc >= opts.divOB &&
         hi > prevTopHigh &&
         osc < prevTopOsc
       ) {
         bearDiv = true;
+        bearFrom = { t: prevTopTime, v: prevTopOsc };
       }
       prevTopOsc = osc;
       prevTopHigh = hi;
+      prevTopTime = candles[i - 2].time;
     }
     if (isBotFractal(i)) {
       const osc = wt2[i - 2];
@@ -840,11 +853,13 @@ export function cipherB(
       if (
         prevBotLow !== null &&
         prevBotOsc !== null &&
+        prevBotTime !== null &&
         osc <= opts.divOS &&
         lo < prevBotLow &&
         osc > prevBotOsc
       ) {
         bullDiv = true;
+        bullFrom = { t: prevBotTime, v: prevBotOsc };
       }
       // Gold buy uses the previous bottom fractal's osc value + its rsi
       const goldOk =
@@ -858,11 +873,26 @@ export function cipherB(
       }
       prevBotOsc = osc;
       prevBotLow = lo;
+      prevBotTime = candles[i - 2].time;
       prevBotWt = osc;
     }
 
-    if (bullDiv) signals.push({ time: candles[i - 2].time, kind: "bullDiv", value: wt2[i - 2] });
-    if (bearDiv) signals.push({ time: candles[i - 2].time, kind: "bearDiv", value: wt2[i - 2] });
+    if (bullDiv)
+      signals.push({
+        time: candles[i - 2].time,
+        kind: "bullDiv",
+        value: wt2[i - 2],
+        prevTime: bullFrom?.t,
+        prevValue: bullFrom?.v,
+      });
+    if (bearDiv)
+      signals.push({
+        time: candles[i - 2].time,
+        kind: "bearDiv",
+        value: wt2[i - 2],
+        prevTime: bearFrom?.t,
+        prevValue: bearFrom?.v,
+      });
 
     if (crossed) {
       if (crossUp && oversold) {

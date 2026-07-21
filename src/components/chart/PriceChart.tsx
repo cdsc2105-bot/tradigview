@@ -15,7 +15,6 @@ import {
   type ISeriesMarkersPluginApi,
   type IPriceLine,
   type LineWidth,
-  type SeriesMarker,
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
@@ -245,6 +244,9 @@ interface LastValues {
   wt2?: number;
   cipherWt1?: number;
   cipherWt2?: number;
+  cipherVwap?: number;
+  cipherRsi?: number;
+  cipherMfi?: number;
   /** Last value of each EMA ribbon line, fast → slow */
   ribbon?: (number | undefined)[];
   /** Ichimoku cloud bias from the last Senkou A vs B */
@@ -315,7 +317,11 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const cipherObRef = useRef<ISeriesApi<"Line"> | null>(null);
   const cipherOsRef = useRef<ISeriesApi<"Line"> | null>(null);
   const cipher0Ref = useRef<ISeriesApi<"Line"> | null>(null);
-  const cipherMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const cipherRsiRef = useRef<ISeriesApi<"Line"> | null>(null);
+  /** Dot rows: buy/sell/gold/divergence, plus the small dots on the WT wave */
+  const cipherDotRefs = useRef<Record<string, ISeriesApi<"Line"> | null>>({});
+  /** Green/red lines connecting divergence pivots */
+  const cipherDivSegRef = useRef<SegmentsPrimitive | null>(null);
   /** One line series per configured ribbon EMA, fast → slow */
   const ribbonRefs = useRef<ISeriesApi<"Line">[]>([]);
   const ribbonFillRef = useRef<BandFillPrimitive | null>(null);
@@ -1295,7 +1301,45 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       cipherObRef.current = guide(CIPHER_DEFAULTS.obLevel, hexToRgba("#ffffff", 15));
       cipherOsRef.current = guide(CIPHER_DEFAULTS.osLevel, hexToRgba("#ffffff", 15));
 
-      cipherMarkersRef.current = createSeriesMarkers(cipherWt2Ref.current, []);
+      // RSI drawn right in the Cipher pane (the magenta line)
+      cipherRsiRef.current = chart.addSeries(
+        LineSeries,
+        {
+          color: CIPHER_COLORS.rsi,
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        },
+        paneIndex,
+      );
+
+      // Signal dots: line hidden, only the point markers show, so each sits at
+      // a fixed height like the script's plotchar rows.
+      const dots = (color: string, radius: number) =>
+        chart.addSeries(
+          LineSeries,
+          {
+            color,
+            lineVisible: false,
+            pointMarkersVisible: true,
+            pointMarkersRadius: radius,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          },
+          paneIndex,
+        );
+      cipherDotRefs.current = {
+        buy: dots(CIPHER_COLORS.buyDot, 4),
+        sell: dots(CIPHER_COLORS.sellDot, 4),
+        gold: dots(CIPHER_COLORS.gold, 5),
+        bullDiv: dots(CIPHER_COLORS.bullDiv, 3),
+        bearDiv: dots(CIPHER_COLORS.bearDiv, 3),
+        crossUp: dots(CIPHER_COLORS.buy, 2.5),
+        crossDown: dots(CIPHER_COLORS.sell, 2.5),
+      };
+
+      cipherDivSegRef.current = new SegmentsPrimitive();
+      cipherWt2Ref.current.attachPrimitive(cipherDivSegRef.current);
 
       try {
         chart.panes()[paneIndex]?.setStretchFactor(1);
@@ -1311,11 +1355,16 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         cipherObRef,
         cipherOsRef,
         cipher0Ref,
+        cipherRsiRef,
       ].forEach((r) => {
         if (r.current) chart.removeSeries(r.current);
         r.current = null;
       });
-      cipherMarkersRef.current = null;
+      Object.values(cipherDotRefs.current).forEach((s) => {
+        if (s) chart.removeSeries(s);
+      });
+      cipherDotRefs.current = {};
+      cipherDivSegRef.current = null;
     }
     requestAnimationFrame(() => recomputePaneOffsets());
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1384,9 +1433,13 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         cipherObRef,
         cipherOsRef,
         cipher0Ref,
+        cipherRsiRef,
       ].forEach((r) => r.current?.applyOptions({ visible: vis }));
+      Object.values(cipherDotRefs.current).forEach((s) =>
+        s?.applyOptions({ visible: vis }),
+      );
       if (vis) updateCipher();
-      else cipherMarkersRef.current?.setMarkers([]);
+      else cipherDivSegRef.current?.setSegments([], false);
     }
     if (ichiTenkanRef.current) {
       const vis = v("ichimoku");
@@ -2449,18 +2502,19 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     setLastValues((prev) => ({ ...prev, wt1: last?.wt1, wt2: last?.wt2 }));
   }
 
-  /** Marker shape/color/size per Cipher B signal, matching the script. */
-  const CIPHER_MARKER: Record<
-    CipherSignalKind,
-    { color: string; position: "aboveBar" | "belowBar" | "inBar"; size: number }
-  > = {
-    buy: { color: CIPHER_COLORS.buy, position: "belowBar", size: 2 },
-    sell: { color: CIPHER_COLORS.sell, position: "aboveBar", size: 2 },
-    gold: { color: CIPHER_COLORS.gold, position: "belowBar", size: 2 },
-    crossUp: { color: CIPHER_COLORS.buy, position: "inBar", size: 0 },
-    crossDown: { color: CIPHER_COLORS.sell, position: "inBar", size: 0 },
-    bullDiv: { color: CIPHER_COLORS.bullDiv, position: "belowBar", size: 1 },
-    bearDiv: { color: CIPHER_COLORS.bearDiv, position: "aboveBar", size: 1 },
+  /**
+   * Fixed height each signal row sits at, mirroring the script's `plotchar`
+   * absolute positions — buys along the bottom, sells along the top. Cross dots
+   * ride the wave itself (null = use the bar's own wt2).
+   */
+  const CIPHER_ROW: Record<CipherSignalKind, number | null> = {
+    buy: -107,
+    sell: 105,
+    gold: -106,
+    bullDiv: -106,
+    bearDiv: 106,
+    crossUp: null,
+    crossDown: null,
   };
 
   function updateCipher() {
@@ -2476,6 +2530,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     cipherWt1Ref.current?.setData(at((p) => p.wt1));
     cipherVwapRef.current?.setData(at((p) => p.vwap));
     cipherMfiRef.current?.setData(at((p) => p.rsiMfi));
+    cipherRsiRef.current?.setData(at((p) => p.rsi));
 
     const first = points[0].time as UTCTimestamp;
     const lastT = points[points.length - 1].time as UTCTimestamp;
@@ -2492,39 +2547,46 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       { time: lastT, value: CIPHER_DEFAULTS.osLevel },
     ]);
 
-    // One marker per bar: keep the highest-priority signal so they don't stack.
-    const priority: CipherSignalKind[] = [
-      "gold",
-      "buy",
-      "sell",
-      "bullDiv",
-      "bearDiv",
-      "crossUp",
-      "crossDown",
-    ];
-    const best = new Map<number, CipherSignalKind>();
+    // Each signal kind gets its own dot series, so they can overlap freely and
+    // sit at their own fixed height.
+    const byKind = new Map<CipherSignalKind, { time: UTCTimestamp; value: number }[]>();
     for (const s of signals) {
-      const cur = best.get(s.time);
-      if (!cur || priority.indexOf(s.kind) < priority.indexOf(cur)) {
-        best.set(s.time, s.kind);
-      }
+      const row = CIPHER_ROW[s.kind];
+      const list = byKind.get(s.kind) ?? [];
+      list.push({ time: s.time as UTCTimestamp, value: row ?? s.value });
+      byKind.set(s.kind, list);
     }
-    const markers: SeriesMarker<Time>[] = [...best.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([time, kind]) => {
-        const m = CIPHER_MARKER[kind];
-        return {
-          time: time as UTCTimestamp,
-          position: m.position,
-          shape: "circle" as const,
-          color: m.color,
-          size: m.size,
-        };
-      });
-    cipherMarkersRef.current?.setMarkers(markers);
+    for (const [kind, series] of Object.entries(cipherDotRefs.current)) {
+      const data = byKind.get(kind as CipherSignalKind) ?? [];
+      // De-dup + sort: lightweight-charts needs strictly ascending times
+      const seen = new Set<number>();
+      const clean = data
+        .sort((a, b) => a.time - b.time)
+        .filter((d) => (seen.has(d.time) ? false : (seen.add(d.time), true)));
+      series?.setData(clean);
+    }
+
+    // Green/red lines joining each divergence to the pivot before it
+    const segs: Segment[] = signals
+      .filter((s) => (s.kind === "bullDiv" || s.kind === "bearDiv") && s.prevTime !== undefined)
+      .map((s) => ({
+        t1: s.prevTime as UTCTimestamp,
+        v1: s.prevValue as number,
+        t2: s.time as UTCTimestamp,
+        v2: s.value,
+        color: s.kind === "bullDiv" ? CIPHER_COLORS.bullDiv : CIPHER_COLORS.bearDiv,
+      }));
+    cipherDivSegRef.current?.setSegments(segs, segs.length > 0);
 
     const last = points[points.length - 1];
-    setLastValues((prev) => ({ ...prev, cipherWt1: last.wt1, cipherWt2: last.wt2 }));
+    setLastValues((prev) => ({
+      ...prev,
+      cipherWt1: last.wt1,
+      cipherWt2: last.wt2,
+      cipherVwap: last.vwap,
+      cipherRsi: last.rsi,
+      cipherMfi: last.rsiMfi,
+    }));
   }
 
   /**
@@ -3279,10 +3341,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           className="pointer-events-none absolute z-10"
         >
           <IndicatorPill
-            name="Cipher B"
+            name="VMC Cipher B"
             value={
-              lastValues.cipherWt2 !== undefined
-                ? `WT ${lastValues.cipherWt2.toFixed(1)}`
+              lastValues.cipherWt1 !== undefined
+                ? `WT1 ${lastValues.cipherWt1.toFixed(2)} · WT2 ${(lastValues.cipherWt2 ?? 0).toFixed(2)} · VWAP ${(lastValues.cipherVwap ?? 0).toFixed(2)} · RSI ${(lastValues.cipherRsi ?? 0).toFixed(2)} · MFI ${(lastValues.cipherMfi ?? 0).toFixed(2)}`
                 : undefined
             }
             color={CIPHER_COLORS.wt1}

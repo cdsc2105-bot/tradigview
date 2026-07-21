@@ -244,11 +244,14 @@ export const CIPHER_COLORS = {
   vwap: "#ffffff", // fast WT area — white
   mfiUp: "#3ee145", // money flow > 0 — green
   mfiDown: "#ff3d2e", // money flow < 0 — red
-  buy: "#00e676", // WT cross up dot
-  sell: "#ff5252", // WT cross down dot
+  buy: "#00e676", // small WT cross-up dot
+  sell: "#ff5252", // small WT cross-down dot
+  buyDot: "#3fff00", // big buy circle (bottom row)
+  sellDot: "#ff0000", // big sell circle (top row)
   gold: "#e2a400", // gold buy
   bullDiv: "#00e676",
   bearDiv: "#e60000",
+  rsi: "#c33ee1", // RSI line inside the Cipher pane — magenta
 } as const;
 
 /** TradingView oscillator styling shared by both stochastic panes. */
