@@ -70,7 +70,8 @@ import {
   sessionLines,
 } from "@/components/chart/sessionLines";
 import { SegmentsPrimitive, type Segment } from "@/components/chart/segments";
-import { formatPrice, formatVolume, priceFormatFor } from "@/lib/format";
+import { formatVolume } from "@/lib/format";
+import { formatPriceFor, precisionFor } from "@/lib/precision";
 import { IndicatorPill } from "./IndicatorPill";
 import { MeasureOverlay } from "./MeasureOverlay";
 
@@ -2594,14 +2595,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
    * PEPE 8). Guarded so it only reapplies when the precision actually changes.
    */
   function applyPriceFormat(lastClose: number) {
-    const fmt = priceFormatFor(lastClose);
-    if (fmt.precision === pricePrecisionRef.current) return;
-    pricePrecisionRef.current = fmt.precision;
+    const precision = precisionFor(exchange, symbol, lastClose);
+    if (precision === pricePrecisionRef.current) return;
+    pricePrecisionRef.current = precision;
     const opts = {
       priceFormat: {
         type: "price" as const,
-        precision: fmt.precision,
-        minMove: fmt.minMove,
+        precision,
+        minMove: Math.pow(10, -precision),
       },
     };
     candleSeriesRef.current?.applyOptions(opts);
@@ -3043,16 +3044,16 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           {hover && (
             <div className="flex items-center gap-x-3 text-[11px]">
               <span className="text-tv-text-muted">
-                O <span className={greenOrRed(hover.c - hover.o)}>{formatPrice(hover.o)}</span>
+                O <span className={greenOrRed(hover.c - hover.o)}>{formatPriceFor(exchange, symbol, hover.o)}</span>
               </span>
               <span className="text-tv-text-muted">
-                H <span className={greenOrRed(hover.c - hover.o)}>{formatPrice(hover.h)}</span>
+                H <span className={greenOrRed(hover.c - hover.o)}>{formatPriceFor(exchange, symbol, hover.h)}</span>
               </span>
               <span className="text-tv-text-muted">
-                L <span className={greenOrRed(hover.c - hover.o)}>{formatPrice(hover.l)}</span>
+                L <span className={greenOrRed(hover.c - hover.o)}>{formatPriceFor(exchange, symbol, hover.l)}</span>
               </span>
               <span className="text-tv-text-muted">
-                C <span className={greenOrRed(hover.c - hover.o)}>{formatPrice(hover.c)}</span>
+                C <span className={greenOrRed(hover.c - hover.o)}>{formatPriceFor(exchange, symbol, hover.c)}</span>
               </span>
               <span className={greenOrRed(hover.pct)}>
                 {hover.pct >= 0 ? "+" : ""}
@@ -3070,7 +3071,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           {lastPrice ? (
             <>
               <span className={`text-lg font-semibold tabular-nums ${greenOrRed(lastPrice.pct)}`}>
-                {formatPrice(lastPrice.value)}
+                {formatPriceFor(exchange, symbol, lastPrice.value)}
               </span>
               <span className={`text-xs ${greenOrRed(lastPrice.pct)}`}>
                 {lastPrice.pct >= 0 ? "+" : ""}
@@ -3087,7 +3088,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           {indicators.ema20 && (
             <IndicatorPill
               name={`EMA ${config.ema20}`}
-              value={lastValues.ema20 !== undefined ? formatPrice(lastValues.ema20) : undefined}
+              value={lastValues.ema20 !== undefined ? formatPriceFor(exchange, symbol, lastValues.ema20) : undefined}
               color={INDICATOR_COLORS.ema20}
               hidden={hidden.ema20}
               onToggleHide={() => toggleHidden("ema20")}
@@ -3098,7 +3099,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           {indicators.ema50 && (
             <IndicatorPill
               name={`EMA ${config.ema50}`}
-              value={lastValues.ema50 !== undefined ? formatPrice(lastValues.ema50) : undefined}
+              value={lastValues.ema50 !== undefined ? formatPriceFor(exchange, symbol, lastValues.ema50) : undefined}
               color={INDICATOR_COLORS.ema50}
               hidden={hidden.ema50}
               onToggleHide={() => toggleHidden("ema50")}
@@ -3109,7 +3110,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           {indicators.ema200 && (
             <IndicatorPill
               name={`EMA ${config.ema200}`}
-              value={lastValues.ema200 !== undefined ? formatPrice(lastValues.ema200) : undefined}
+              value={lastValues.ema200 !== undefined ? formatPriceFor(exchange, symbol, lastValues.ema200) : undefined}
               color={INDICATOR_COLORS.ema200}
               hidden={hidden.ema200}
               onToggleHide={() => toggleHidden("ema200")}
@@ -3155,7 +3156,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           {indicators.bb && (
             <IndicatorPill
               name={`BB ${config.bbPeriod}, ${config.bbStdDev}`}
-              value={lastValues.bbMiddle !== undefined ? formatPrice(lastValues.bbMiddle) : undefined}
+              value={lastValues.bbMiddle !== undefined ? formatPriceFor(exchange, symbol, lastValues.bbMiddle) : undefined}
               color={INDICATOR_COLORS.bb}
               hidden={hidden.bb}
               onToggleHide={() => toggleHidden("bb")}
@@ -3168,7 +3169,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
               name={`ST ${config.stPeriod}, ${config.stMultiplier}`}
               value={
                 lastValues.supertrend !== undefined
-                  ? `${formatPrice(lastValues.supertrend)} ${lastValues.supertrendDir === 1 ? "▲" : "▼"}`
+                  ? `${formatPriceFor(exchange, symbol, lastValues.supertrend)} ${lastValues.supertrendDir === 1 ? "▲" : "▼"}`
                   : undefined
               }
               color={lastValues.supertrendDir === 1 ? INDICATOR_COLORS.supertrend : "#ef5350"}
@@ -3185,7 +3186,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
                   ? `VWAP ±${vwapMults.join("/")}σ`
                   : "VWAP"
               }
-              value={lastValues.vwapVal !== undefined ? formatPrice(lastValues.vwapVal) : undefined}
+              value={lastValues.vwapVal !== undefined ? formatPriceFor(exchange, symbol, lastValues.vwapVal) : undefined}
               color={config.vwapColor}
               hidden={hidden.vwap}
               onToggleHide={() => toggleHidden("vwap")}

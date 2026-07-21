@@ -1,4 +1,5 @@
 import type { Candle, Ticker24h, Timeframe } from "@/lib/binance/types";
+import { decimalsFromTickSize, registerPrecision } from "@/lib/precision";
 
 /**
  * Binance USDT-M perpetual futures (fapi). Same response shapes as spot, so the
@@ -67,17 +68,26 @@ export async function fetchFuturesSymbols(): Promise<string[]> {
   const res = await fetch(`${FAPI}/exchangeInfo`, { cache: "force-cache" });
   if (!res.ok) throw new Error(`futures exchangeInfo ${res.status}`);
   const data = await res.json();
-  return (data.symbols as {
+  const live = (data.symbols as {
     symbol: string;
     status: string;
     quoteAsset: string;
     contractType: string;
-  }[])
-    .filter(
-      (s) =>
-        s.status === "TRADING" &&
-        s.quoteAsset === "USDT" &&
-        s.contractType === "PERPETUAL",
-    )
-    .map((s) => s.symbol.toUpperCase());
+    filters?: { filterType: string; tickSize?: string }[];
+  }[]).filter(
+    (s) =>
+      s.status === "TRADING" &&
+      s.quoteAsset === "USDT" &&
+      s.contractType === "PERPETUAL",
+  );
+
+  // Register the real tick size so prices render at the venue's own precision
+  for (const s of live) {
+    const tick = s.filters?.find((f) => f.filterType === "PRICE_FILTER")?.tickSize;
+    if (tick) {
+      registerPrecision("binancef", s.symbol.toUpperCase(), decimalsFromTickSize(tick));
+    }
+  }
+
+  return live.map((s) => s.symbol.toUpperCase());
 }

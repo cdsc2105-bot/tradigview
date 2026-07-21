@@ -1,4 +1,5 @@
 import type { Candle, Ticker24h, Timeframe } from "@/lib/binance/types";
+import { registerPrecision } from "@/lib/precision";
 
 const BITGET_BASE = "https://api.bitget.com/api/v2/mix/market";
 
@@ -177,16 +178,26 @@ export async function fetchBitgetTickers(
 export async function fetchBitgetSymbols(): Promise<string[]> {
   const params = new URLSearchParams({ productType: "USDT-FUTURES" });
 
-  const res = await fetch(`${BITGET_BASE}/tickers?${params}`);
+  // `contracts` carries pricePlace (decimals) alongside the symbol list, so one
+  // call gives us both what's listed and how precisely each pair is quoted.
+  const res = await fetch(`${BITGET_BASE}/contracts?${params}`);
   if (!res.ok) {
     throw new Error(`Bitget symbols error: ${res.status} ${res.statusText}`);
   }
 
   const json = await res.json();
-  const data: { symbol?: string }[] = json.data ?? [];
-  return data
-    .map((t) => String(t.symbol ?? "").toUpperCase())
-    .filter(Boolean);
+  const data: { symbol?: string; pricePlace?: string }[] = json.data ?? [];
+  const out: string[] = [];
+  for (const c of data) {
+    const symbol = String(c.symbol ?? "").toUpperCase();
+    if (!symbol) continue;
+    out.push(symbol);
+    const places = Number(c.pricePlace);
+    if (isFinite(places)) {
+      registerPrecision("bitget", symbol, Math.max(0, Math.min(8, places)));
+    }
+  }
+  return out;
 }
 
 /**

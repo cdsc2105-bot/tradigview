@@ -1,4 +1,5 @@
 import type { Candle, SymbolInfo, Ticker24h, Timeframe } from "./types";
+import { decimalsFromTickSize, registerPrecision } from "@/lib/precision";
 
 const BASE = "https://api.binance.com/api/v3";
 
@@ -68,22 +69,36 @@ export async function fetchTickers24h(symbols: string[]): Promise<Ticker24h[]> {
   }));
 }
 
+interface RawSymbol {
+  symbol: string;
+  baseAsset: string;
+  quoteAsset: string;
+  status: string;
+  filters?: { filterType: string; tickSize?: string }[];
+}
+
 let cachedSymbols: SymbolInfo[] | null = null;
 export async function fetchExchangeSymbols(): Promise<SymbolInfo[]> {
   if (cachedSymbols) return cachedSymbols;
   const res = await fetch(`${BASE}/exchangeInfo`, { cache: "force-cache" });
   if (!res.ok) throw new Error(`exchangeInfo ${res.status}`);
   const data = await res.json();
-  cachedSymbols = data.symbols
-    .filter(
-      (s: { status: string; quoteAsset: string }) =>
-        s.status === "TRADING" && s.quoteAsset === "USDT",
-    )
-    .map((s: { symbol: string; baseAsset: string; quoteAsset: string; status: string }) => ({
-      symbol: s.symbol,
-      baseAsset: s.baseAsset,
-      quoteAsset: s.quoteAsset,
-      status: s.status,
-    }));
+  const live = (data.symbols as RawSymbol[]).filter(
+    (s) => s.status === "TRADING" && s.quoteAsset === "USDT",
+  );
+
+  // Record each pair's real tick size so the chart axis and watchlist show the
+  // same decimals the exchange quotes in (NEAR 0.001 → 3, ADA 0.0001 → 4).
+  for (const s of live) {
+    const tick = s.filters?.find((f) => f.filterType === "PRICE_FILTER")?.tickSize;
+    if (tick) registerPrecision("binance", s.symbol, decimalsFromTickSize(tick));
+  }
+
+  cachedSymbols = live.map((s) => ({
+    symbol: s.symbol,
+    baseAsset: s.baseAsset,
+    quoteAsset: s.quoteAsset,
+    status: s.status,
+  }));
   return cachedSymbols!;
 }

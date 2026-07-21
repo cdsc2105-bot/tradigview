@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, Plus, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, Plus, X } from "lucide-react";
 import { fetchTickers24h } from "@/lib/binance/rest";
 import { fetchBitgetTickers } from "@/lib/exchanges/bitget";
 import { fetchFuturesTickers } from "@/lib/exchanges/binance-futures";
@@ -11,7 +11,8 @@ import { fetchSupportedSymbols } from "@/lib/exchanges/symbols";
 import { getBinanceWS, getBinanceFuturesWS } from "@/lib/binance/ws";
 import { useChartStore, type Exchange } from "@/lib/store/chart-store";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { formatPrice, formatPct } from "@/lib/format";
+import { formatPct } from "@/lib/format";
+import { formatPriceFor } from "@/lib/precision";
 import { cn } from "@/lib/utils";
 
 interface Row {
@@ -44,6 +45,11 @@ export function Watchlist() {
   const [rows, setRows] = useState<RowMap>({});
   const [flash, setFlash] = useState<Record<string, "up" | "down" | null>>({});
   const [collapsed, setCollapsed] = useState<Partial<Record<Exchange, boolean>>>({});
+  /** Column sort, TradingView-style — click a header to sort by it */
+  const [sort, setSort] = useState<{
+    key: "symbol" | "price" | "pct";
+    dir: "asc" | "desc";
+  }>({ key: "symbol", dir: "asc" });
   const [supported, setSupported] = useState<
     Record<Exchange, Set<string> | null>
   >({ binance: null, binancef: null, bitget: null, stocks: null });
@@ -263,6 +269,23 @@ export function Watchlist() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stocksKey]);
 
+  /** Order a section's symbols by the active column. */
+  const sortRows = (symbols: string[], ex: Exchange) => {
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return [...symbols].sort((a, b) => {
+      if (sort.key === "symbol") return a.localeCompare(b) * dir;
+      const ra = rows[rk(ex, a)];
+      const rb = rows[rk(ex, b)];
+      // Rows still waiting on their first tick sink to the bottom
+      if (!ra && !rb) return 0;
+      if (!ra) return 1;
+      if (!rb) return -1;
+      const va = sort.key === "price" ? ra.price : ra.pct;
+      const vb = sort.key === "price" ? rb.price : rb.pct;
+      return (va - vb) * dir;
+    });
+  };
+
   const select = (ex: Exchange, s: string) => {
     setExchange(ex);
     setSymbol(s);
@@ -285,9 +308,38 @@ export function Watchlist() {
         </button>
       </div>
       <div className="grid shrink-0 grid-cols-[1fr_auto_auto] gap-2 border-b border-tv-border px-3 py-1.5 text-[10px] uppercase tracking-wider text-tv-text-dim">
-        <span>Símbolo</span>
-        <span className="text-right">Precio</span>
-        <span className="text-right">24h</span>
+        {(
+          [
+            ["symbol", "Símbolo", "text-left"],
+            ["price", "Precio", "text-right"],
+            ["pct", "24h", "text-right"],
+          ] as const
+        ).map(([key, label, align]) => (
+          <button
+            key={key}
+            onClick={() =>
+              setSort((s) =>
+                s.key === key
+                  ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
+                  : { key, dir: key === "symbol" ? "asc" : "desc" },
+              )
+            }
+            className={cn(
+              "flex items-center gap-0.5 uppercase transition-colors hover:text-tv-text",
+              align,
+              align === "text-right" && "justify-end",
+              sort.key === key && "text-tv-text",
+            )}
+          >
+            {label}
+            {sort.key === key &&
+              (sort.dir === "asc" ? (
+                <ArrowUp className="h-2.5 w-2.5" />
+              ) : (
+                <ArrowDown className="h-2.5 w-2.5" />
+              ))}
+          </button>
+        ))}
       </div>
       {/* min-h-0 is what lets this shrink inside the flex column — without it the
           list grows past the sidebar and the scrollbar never appears */}
@@ -333,7 +385,7 @@ export function Watchlist() {
                   </div>
                 )}
 
-                {!isCollapsed && symbols.map((s) => {
+                {!isCollapsed && sortRows(symbols, section.key).map((s) => {
                   const key = rk(section.key, s);
                   const row = rows[key];
                   const isActive = s === symbol && section.key === exchange;
@@ -369,16 +421,16 @@ export function Watchlist() {
                           !f && "text-tv-text",
                         )}
                       >
-                        {row ? formatPrice(row.price) : "—"}
+                        {row ? formatPriceFor(section.key, s, row.price) : "—"}
                       </span>
                       <div className="flex items-center justify-end gap-1">
                         <span
                           className={cn(
-                            "tabular-nums",
+                            "rounded px-1 py-0.5 text-[11px] font-medium tabular-nums",
                             row
                               ? row.pct >= 0
-                                ? "text-tv-green"
-                                : "text-tv-red"
+                                ? "bg-tv-green/10 text-tv-green"
+                                : "bg-tv-red/10 text-tv-red"
                               : "text-tv-text-muted",
                           )}
                         >
