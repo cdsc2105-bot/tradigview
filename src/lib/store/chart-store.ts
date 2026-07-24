@@ -372,6 +372,10 @@ interface ChartState {
   settingsTarget: IndicatorKey | null;
   /** Pane indicator currently blown up big (null = normal layout) */
   maximizedPane: IndicatorKey | null;
+  /** Range-bar preset: days of history to frame, "all", or a request nonce */
+  visibleRangeDays: number | "all" | null;
+  /** Bumped on each range click so the same button re-triggers the zoom */
+  rangeRequest: number;
 
   // Actions
   setSymbol: (s: string) => void;
@@ -408,6 +412,8 @@ interface ChartState {
   setSettingsTarget: (k: IndicatorKey | null) => void;
   /** Toggle a pane between big and normal (same key twice = restore) */
   toggleMaximizedPane: (k: IndicatorKey) => void;
+  /** Frame N days of history (or "all"); the chart reads rangeRequest to fire */
+  setVisibleRangeDays: (d: number | "all") => void;
 }
 
 export const useChartStore = create<ChartState>()(
@@ -465,6 +471,8 @@ export const useChartStore = create<ChartState>()(
       watchlistOpen: false,
       settingsTarget: null,
       maximizedPane: null,
+      visibleRangeDays: null,
+      rangeRequest: 0,
 
       setSymbol: (symbol) => set({ symbol }),
       setExchange: (exchange) => set({ exchange }),
@@ -646,6 +654,8 @@ export const useChartStore = create<ChartState>()(
       setSettingsTarget: (settingsTarget) => set({ settingsTarget }),
       toggleMaximizedPane: (k) =>
         set((s) => ({ maximizedPane: s.maximizedPane === k ? null : k })),
+      setVisibleRangeDays: (d) =>
+        set((s) => ({ visibleRangeDays: d, rangeRequest: s.rangeRequest + 1 })),
     }),
     {
       name: "tv-gratis-chart-state",

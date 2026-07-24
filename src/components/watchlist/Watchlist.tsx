@@ -18,6 +18,8 @@ import { cn } from "@/lib/utils";
 interface Row {
   price: number;
   pct: number;
+  /** Absolute 24h change — TradingView's "Chg" column */
+  chg: number;
 }
 
 /** Key rows by "exchange:symbol" so Binance and Bitget don't collide. */
@@ -47,7 +49,7 @@ export function Watchlist() {
   const [collapsed, setCollapsed] = useState<Partial<Record<Exchange, boolean>>>({});
   /** Column sort, TradingView-style — click a header to sort by it */
   const [sort, setSort] = useState<{
-    key: "symbol" | "price" | "pct";
+    key: "symbol" | "price" | "chg" | "pct";
     dir: "asc" | "desc";
   }>({ key: "symbol", dir: "asc" });
   const [supported, setSupported] = useState<
@@ -107,6 +109,7 @@ export function Watchlist() {
             next[rk("binance", t.symbol)] = {
               price: t.lastPrice,
               pct: t.priceChangePercent,
+              chg: t.priceChange,
             };
           });
           return next;
@@ -128,7 +131,7 @@ export function Watchlist() {
             setTimeout(() => setFlash((f) => ({ ...f, [key]: null })), 300);
           }
         }
-        return { ...prev, [key]: { price: tick.close, pct: tick.pct } };
+        return { ...prev, [key]: { price: tick.close, pct: tick.pct, chg: tick.close - tick.open } };
       });
     });
 
@@ -153,6 +156,7 @@ export function Watchlist() {
             next[rk("binancef", t.symbol)] = {
               price: t.lastPrice,
               pct: t.priceChangePercent,
+              chg: t.priceChange,
             };
           });
           return next;
@@ -174,7 +178,7 @@ export function Watchlist() {
             setTimeout(() => setFlash((f) => ({ ...f, [key]: null })), 300);
           }
         }
-        return { ...prev, [key]: { price: tick.close, pct: tick.pct } };
+        return { ...prev, [key]: { price: tick.close, pct: tick.pct, chg: tick.close - tick.open } };
       });
     });
 
@@ -200,6 +204,7 @@ export function Watchlist() {
             next[rk("bitget", t.symbol)] = {
               price: t.lastPrice,
               pct: t.priceChangePercent,
+              chg: t.priceChange,
             };
           });
           return next;
@@ -221,7 +226,7 @@ export function Watchlist() {
             setTimeout(() => setFlash((f) => ({ ...f, [key]: null })), 300);
           }
         }
-        return { ...prev, [key]: { price: t.lastPrice, pct: t.priceChangePercent } };
+        return { ...prev, [key]: { price: t.lastPrice, pct: t.priceChangePercent, chg: t.priceChange } };
       });
     });
 
@@ -252,7 +257,7 @@ export function Watchlist() {
                 setFlash((f) => ({ ...f, [key]: dir }));
                 setTimeout(() => setFlash((f) => ({ ...f, [key]: null })), 300);
               }
-              next[key] = { price: t.lastPrice, pct: t.priceChangePercent };
+              next[key] = { price: t.lastPrice, pct: t.priceChangePercent, chg: t.priceChange };
             });
             return next;
           });
@@ -280,9 +285,9 @@ export function Watchlist() {
       if (!ra && !rb) return 0;
       if (!ra) return 1;
       if (!rb) return -1;
-      const va = sort.key === "price" ? ra.price : ra.pct;
-      const vb = sort.key === "price" ? rb.price : rb.pct;
-      return (va - vb) * dir;
+      const pick = (r: Row) =>
+        sort.key === "price" ? r.price : sort.key === "chg" ? r.chg : r.pct;
+      return (pick(ra) - pick(rb)) * dir;
     });
   };
 
@@ -307,12 +312,13 @@ export function Watchlist() {
           <Plus className="h-3.5 w-3.5" />
         </button>
       </div>
-      <div className="grid shrink-0 grid-cols-[1fr_auto_auto] gap-2 border-b border-tv-border px-3 py-1.5 text-[10px] uppercase tracking-wider text-tv-text-dim">
+      <div className="grid shrink-0 grid-cols-[1fr_auto_auto_auto] gap-2 border-b border-tv-border px-3 py-1.5 text-[10px] uppercase tracking-wider text-tv-text-dim">
         {(
           [
             ["symbol", "Símbolo", "text-left"],
-            ["price", "Precio", "text-right"],
-            ["pct", "24h", "text-right"],
+            ["price", "Último", "text-right"],
+            ["chg", "Chg", "text-right"],
+            ["pct", "Chg%", "text-right"],
           ] as const
         ).map(([key, label, align]) => (
           <button
@@ -395,7 +401,7 @@ export function Watchlist() {
                       key={key}
                       onClick={() => select(section.key, s)}
                       className={cn(
-                        "group grid cursor-pointer grid-cols-[1fr_auto_auto] items-center gap-2 px-3 py-1.5 text-xs transition-colors",
+                        "group grid cursor-pointer grid-cols-[1fr_auto_auto_auto] items-center gap-2 px-3 py-1.5 text-xs transition-colors",
                         "hover:bg-tv-panel-hover",
                         isActive && "bg-tv-panel-hover",
                       )}
@@ -422,6 +428,21 @@ export function Watchlist() {
                         )}
                       >
                         {row ? formatPriceFor(section.key, s, row.price) : "—"}
+                      </span>
+                      {/* Absolute change, TradingView's "Chg" column */}
+                      <span
+                        className={cn(
+                          "text-right tabular-nums",
+                          row
+                            ? row.chg >= 0
+                              ? "text-tv-green"
+                              : "text-tv-red"
+                            : "text-tv-text-muted",
+                        )}
+                      >
+                        {row
+                          ? `${row.chg >= 0 ? "" : "−"}${formatPriceFor(section.key, s, Math.abs(row.chg))}`
+                          : "—"}
                       </span>
                       <div className="flex items-center justify-end gap-1">
                         <span

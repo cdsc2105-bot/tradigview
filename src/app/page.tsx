@@ -5,6 +5,7 @@ import { LeftSidebar } from "@/components/layout/LeftSidebar";
 import { RightSidebar } from "@/components/layout/RightSidebar";
 import { BottomPanel } from "@/components/layout/BottomPanel";
 import { PriceChart } from "@/components/chart/PriceChart";
+import { RangeBar } from "@/components/chart/RangeBar";
 import { IndicatorSettingsDialog } from "@/components/chart/IndicatorSettingsDialog";
 import { useChartStore } from "@/lib/store/chart-store";
 
@@ -26,6 +27,10 @@ export default function HomePage() {
         <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="min-h-0 min-w-0 flex-1">
             <PriceChart symbol={symbol} timeframe={timeframe} exchange={exchange} />
+          </div>
+          {/* Quick-zoom presets + clock, TradingView-style */}
+          <div className="hidden md:block">
+            <RangeBar />
           </div>
         </main>
         <RightSidebar />

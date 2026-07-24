@@ -72,6 +72,7 @@ import {
 import { SegmentsPrimitive, type Segment } from "@/components/chart/segments";
 import { formatVolume } from "@/lib/format";
 import { formatPriceFor, precisionFor } from "@/lib/precision";
+import { cn } from "@/lib/utils";
 import { IndicatorPill } from "./IndicatorPill";
 import { MeasureOverlay } from "./MeasureOverlay";
 
@@ -194,6 +195,35 @@ function activeVwapBands(cfg: IndicatorConfig): VwapBand[] {
   return cfg.vwapBandLines
     .filter((b) => b.enabled && b.multiplier > 0)
     .sort((a, b) => a.multiplier - b.multiplier);
+}
+
+/** Seconds each timeframe spans — drives the candle-close countdown. */
+const TF_SECONDS: Record<string, number> = {
+  "1m": 60,
+  "2m": 120,
+  "3m": 180,
+  "5m": 300,
+  "15m": 900,
+  "30m": 1800,
+  "1h": 3600,
+  "2h": 7200,
+  "4h": 14400,
+  "6h": 21600,
+  "8h": 28800,
+  "12h": 43200,
+  "1d": 86400,
+  "3d": 259200,
+  "1w": 604800,
+};
+
+/** mm:ss (or h:mm:ss past an hour) left before the current candle closes. */
+function countdownLabel(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
 }
 
 const TV_COLORS = {
@@ -357,6 +387,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const setSettingsTarget = useChartStore((s) => s.setSettingsTarget);
   const maximizedPane = useChartStore((s) => s.maximizedPane);
   const toggleMaximizedPane = useChartStore((s) => s.toggleMaximizedPane);
+  const rangeRequest = useChartStore((s) => s.rangeRequest);
+  const visibleRangeDays = useChartStore((s) => s.visibleRangeDays);
 
   // Refs to avoid recreating subscribeClick on every tool change
   const toolRef = useRef(tool);
@@ -406,6 +438,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [lastPrice, setLastPrice] = useState<{ value: number; pct: number } | null>(null);
+  /** Seconds left before the forming candle closes (null off intraday) */
+  const [countdown, setCountdown] = useState<number | null>(null);
   const [lastValues, setLastValues] = useState<LastValues>({});
   const [paneOffsets, setPaneOffsets] = useState<PaneOffset[]>([]);
   const [measure, setMeasure] = useState<MeasureState>(INITIAL_MEASURE);
@@ -1747,6 +1781,49 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Range-bar presets: frame the last N days (or everything) when the user
+  // clicks 1D / 5D / … . rangeRequest bumps on every click so re-clicking works.
+  useEffect(() => {
+    if (rangeRequest === 0) return;
+    const chart = chartRef.current;
+    const c = candlesRef.current;
+    if (!chart || c.length === 0) return;
+
+    if (visibleRangeDays === "all") {
+      chart.timeScale().fitContent();
+      return;
+    }
+    if (typeof visibleRangeDays !== "number") return;
+
+    const to = c[c.length - 1].time;
+    const from = to - visibleRangeDays * 86400;
+    try {
+      chart.timeScale().setVisibleRange({
+        from: from as UTCTimestamp,
+        to: (to + TF_SECONDS[timeframe] * 12) as UTCTimestamp, // a little right padding
+      });
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeRequest]);
+
+  // Countdown to the current candle's close — the number scalpers watch most.
+  useEffect(() => {
+    const span = TF_SECONDS[timeframe];
+    if (!span) {
+      setCountdown(null);
+      return;
+    }
+    const tick = () => {
+      const last = candlesRef.current[candlesRef.current.length - 1];
+      if (!last) return setCountdown(null);
+      // Bars are stamped at their open, so close = open + one timeframe
+      setCountdown(last.time + span - Date.now() / 1000);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [timeframe, symbol, exchange]);
+
   // Escape cancels whatever is being drawn and returns to the cursor
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -3014,6 +3091,13 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     return "Rango";
   })();
 
+  // Screen y of the last price, so the countdown badge can sit right under it.
+  // renderTick is in the deps chain via the render itself — it recomputes on pan/zoom.
+  const countdownY =
+    lastPrice && candleSeriesRef.current
+      ? candleSeriesRef.current.priceToCoordinate(lastPrice.value)
+      : null;
+
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
@@ -3022,6 +3106,19 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       {loadingHistory && (
         <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded border border-tv-border bg-tv-panel/90 px-2 py-1 text-[11px] text-tv-text-muted shadow">
           Cargando histórico…
+        </div>
+      )}
+
+      {/* Candle-close countdown, pinned to the price axis under the last price */}
+      {countdownY !== null && countdown !== null && countdown > 0 && (
+        <div
+          style={{ top: countdownY + 9 }}
+          className={cn(
+            "pointer-events-none absolute right-1 z-20 rounded px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white",
+            lastPrice && lastPrice.pct >= 0 ? "bg-tv-green" : "bg-tv-red",
+          )}
+        >
+          {countdownLabel(countdown)}
         </div>
       )}
 
@@ -3055,9 +3152,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
               <span className="text-tv-text-muted">
                 C <span className={greenOrRed(hover.c - hover.o)}>{formatPriceFor(exchange, symbol, hover.c)}</span>
               </span>
+              {/* Absolute change then percent, the way TradingView prints it */}
               <span className={greenOrRed(hover.pct)}>
+                {hover.c - hover.o >= 0 ? "+" : "−"}
+                {formatPriceFor(exchange, symbol, Math.abs(hover.c - hover.o))} (
                 {hover.pct >= 0 ? "+" : ""}
-                {hover.pct.toFixed(2)}%
+                {hover.pct.toFixed(2)}%)
               </span>
               <span className="text-tv-text-muted">
                 Vol <span className="text-tv-text">{formatVolume(hover.v)}</span>
