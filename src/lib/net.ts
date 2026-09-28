@@ -8,6 +8,29 @@
  */
 const preferred = new Map<string, number>();
 
+/** Remembered across visits, so a blocked host doesn't cost a detour each time. */
+const STORE_KEY = "trading-preferred-hosts";
+function loadPreferred(group: string): number | undefined {
+  if (preferred.has(group)) return preferred.get(group);
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORE_KEY) ?? "{}") as Record<string, number>;
+    if (typeof saved[group] === "number") preferred.set(group, saved[group]);
+  } catch {
+    // storage unavailable (private mode, SSR) — memory only
+  }
+  return preferred.get(group);
+}
+function savePreferred(group: string, index: number) {
+  preferred.set(group, index);
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORE_KEY) ?? "{}") as Record<string, number>;
+    saved[group] = index;
+    localStorage.setItem(STORE_KEY, JSON.stringify(saved));
+  } catch {
+    // ignore
+  }
+}
+
 export class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -22,9 +45,9 @@ export async function fetchJsonFrom<T>(
   group: string,
   bases: string[],
   path: string,
-  { timeoutMs = 10_000, cache = "no-store" as RequestCache, hedgeMs = 1_500 } = {},
+  { timeoutMs = 10_000, cache = "no-store" as RequestCache, hedgeMs = 1_200 } = {},
 ): Promise<T> {
-  const start = preferred.get(group) ?? 0;
+  const start = Math.min(loadPreferred(group) ?? 0, bases.length - 1);
   const order = bases.map((_, i) => (start + i) % bases.length);
   const controllers: AbortController[] = [];
   let settled = false;
@@ -46,7 +69,7 @@ export async function fetchJsonFrom<T>(
 
   // Hedged requests: start with the preferred host; if it hasn't answered
   // within `hedgeMs` (or fails), also ask the next one. First success wins and
-  // the rest are cancelled — a blocked or slow host costs ~1.5s, not a timeout.
+  // the rest are cancelled — a blocked or slow host costs ~1s, not a timeout.
   return new Promise<T>((resolve, reject) => {
     let pending = 0;
     let next = 0;
@@ -63,7 +86,7 @@ export async function fetchJsonFrom<T>(
           if (settled) return;
           settled = true;
           if (hedgeTimer) clearTimeout(hedgeTimer);
-          preferred.set(group, won);
+          if (won !== preferred.get(group)) savePreferred(group, won);
           controllers.forEach((c) => c.abort());
           resolve(data);
         },

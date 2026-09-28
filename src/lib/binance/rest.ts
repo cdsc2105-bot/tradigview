@@ -4,10 +4,15 @@ import { fetchJsonFrom, HttpError } from "@/lib/net";
 
 /**
  * Binance spot public market data. `data-api.binance.vision` is Binance's own
- * market-data-only mirror: it keeps working on networks and in regions where
- * api.binance.com is blocked, so it is the automatic fallback.
+ * market-data-only mirror, and `/api/proxy` is this app's server relay — the
+ * last resort for networks and countries where the browser can't reach
+ * Binance at all.
  */
-const BASES = ["https://api.binance.com/api/v3", "https://data-api.binance.vision/api/v3"];
+const BASES = [
+  "https://api.binance.com/api/v3",
+  "https://data-api.binance.vision/api/v3",
+  "/api/proxy/binance/api/v3",
+];
 const spot = <T>(path: string, init?: { timeoutMs?: number; cache?: RequestCache }) =>
   fetchJsonFrom<T>("binance-spot", BASES, path, init);
 

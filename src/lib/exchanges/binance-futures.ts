@@ -8,8 +8,10 @@ import { fetchJsonFrom } from "@/lib/net";
  * quirks differ (e.g. the 24h ticker endpoint has no `symbols` batch param).
  */
 const FAPI = "https://fapi.binance.com/fapi/v1";
+/** Direct first; the app's server relay when the browser can't reach fapi. */
+const FAPI_BASES = [FAPI, "/api/proxy/binancef/fapi/v1"];
 const fapi = <T>(path: string, init?: { timeoutMs?: number; cache?: RequestCache }) =>
-  fetchJsonFrom<T>("binance-futures", [FAPI], path, init);
+  fetchJsonFrom<T>("binance-futures", FAPI_BASES, path, init);
 
 /**
  * @param endTime  Unix ms. When set, returns the `limit` candles that closed

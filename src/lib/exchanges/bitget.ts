@@ -1,7 +1,12 @@
 import type { Candle, Ticker24h, Timeframe } from "@/lib/binance/types";
 import { registerPrecision } from "@/lib/precision";
+import { fetchJsonFrom } from "@/lib/net";
 
 const BITGET_BASE = "https://api.bitget.com/api/v2/mix/market";
+/** Direct first; the app's server relay when the browser can't reach Bitget. */
+const BITGET_BASES = [BITGET_BASE, "/api/proxy/bitget/api/v2/mix/market"];
+const bitget = <T>(path: string, init?: { timeoutMs?: number; cache?: RequestCache }) =>
+  fetchJsonFrom<T>("bitget", BITGET_BASES, path, init);
 
 /**
  * Map internal timeframe strings to Bitget granularity values.
@@ -91,12 +96,7 @@ async function fetchBitgetPage(
   const endpoint = endTime === undefined ? "candles" : "history-candles";
   if (endTime !== undefined) params.set("endTime", String(endTime));
 
-  const res = await fetch(`${BITGET_BASE}/${endpoint}?${params}`);
-  if (!res.ok) {
-    throw new Error(`Bitget klines error: ${res.status} ${res.statusText}`);
-  }
-
-  const json = await res.json();
+  const json = await bitget<{ data?: string[][] }>(`/${endpoint}?${params}`);
   const data: string[][] = json.data ?? [];
 
   // Response rows: [timestamp_ms, open, high, low, close, volume_base, volume_quote].
@@ -135,13 +135,9 @@ export async function fetchBitgetTicker(symbol: string): Promise<Ticker24h> {
     productType: "USDT-FUTURES",
   });
 
-  const res = await fetch(`${BITGET_BASE}/ticker?${params}`);
-  if (!res.ok) {
-    throw new Error(`Bitget ticker error: ${res.status} ${res.statusText}`);
-  }
-
-  const json = await res.json();
-  const data = (json.data?.[0] ?? json.data) as Record<string, unknown>;
+  const json = await bitget<{ data?: unknown }>(`/ticker?${params}`);
+  const raw = json.data as Record<string, unknown>[] | Record<string, unknown> | undefined;
+  const data = (Array.isArray(raw) ? raw[0] : raw) as Record<string, unknown>;
 
   return mapTicker(data);
 }
@@ -157,12 +153,7 @@ export async function fetchBitgetTickers(
     productType: "USDT-FUTURES",
   });
 
-  const res = await fetch(`${BITGET_BASE}/tickers?${params}`);
-  if (!res.ok) {
-    throw new Error(`Bitget tickers error: ${res.status} ${res.statusText}`);
-  }
-
-  const json = await res.json();
+  const json = await bitget<{ data?: Record<string, unknown>[] }>(`/tickers?${params}`);
   const data: Record<string, unknown>[] = json.data ?? [];
 
   const requested = new Set(symbols.map((s) => s.toUpperCase()));
@@ -182,13 +173,11 @@ export async function fetchBitgetSymbols(): Promise<string[]> {
 
   // `contracts` carries pricePlace (decimals) alongside the symbol list, so one
   // call gives us both what's listed and how precisely each pair is quoted.
-  const res = await fetch(`${BITGET_BASE}/contracts?${params}`);
-  if (!res.ok) {
-    throw new Error(`Bitget symbols error: ${res.status} ${res.statusText}`);
-  }
-
-  const json = await res.json();
-  const data: { symbol?: string; pricePlace?: string }[] = json.data ?? [];
+  const json = await bitget<{ data?: { symbol?: string; pricePlace?: string }[] }>(
+    `/contracts?${params}`,
+    { timeoutMs: 20_000 },
+  );
+  const data = json.data ?? [];
   const out: string[] = [];
   for (const c of data) {
     const symbol = String(c.symbol ?? "").toUpperCase();

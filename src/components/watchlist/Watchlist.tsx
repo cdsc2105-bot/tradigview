@@ -62,17 +62,43 @@ function useVenueTickers(exchange: Exchange, symbols: string[]): RowMap {
       setRows((prev) => ({ ...prev, ...next }));
     };
 
+    // Stream ticks keep this fresh; if none arrive for a while (WebSocket
+    // blocked on this network), fall back to polling the REST snapshot.
+    let lastTick = Date.now();
+    const pollIfSilent = (load: () => void) => {
+      const id = setInterval(() => {
+        if (!document.hidden && Date.now() - lastTick > 8_000) load();
+      }, 5_000);
+      return () => clearInterval(id);
+    };
+
     let stop: () => void = () => {};
     if (exchange === "binance" || exchange === "binancef") {
       const fetcher = exchange === "binance" ? fetchTickers24h : fetchFuturesTickers;
-      fetcher(symbols).then(snapshot).catch(console.error);
+      const load = () => void fetcher(symbols).then(snapshot).catch(console.error);
+      load();
       const ws = exchange === "binance" ? getBinanceWS() : getBinanceFuturesWS();
-      stop = ws.subscribeMiniTickers(symbols, (t) => push(t.symbol, { price: t.close, pct: t.pct }));
+      const unsub = ws.subscribeMiniTickers(symbols, (t) => {
+        lastTick = Date.now();
+        push(t.symbol, { price: t.close, pct: t.pct });
+      });
+      const stopPoll = pollIfSilent(load);
+      stop = () => {
+        unsub();
+        stopPoll();
+      };
     } else if (exchange === "bitget") {
-      fetchBitgetTickers(symbols).then(snapshot).catch(console.error);
-      stop = getBitgetWS().subscribeTickers(symbols, (t) =>
-        push(t.symbol, { price: t.lastPrice, pct: t.priceChangePercent }),
-      );
+      const load = () => void fetchBitgetTickers(symbols).then(snapshot).catch(console.error);
+      load();
+      const unsub = getBitgetWS().subscribeTickers(symbols, (t) => {
+        lastTick = Date.now();
+        push(t.symbol, { price: t.lastPrice, pct: t.priceChangePercent });
+      });
+      const stopPoll = pollIfSilent(load);
+      stop = () => {
+        unsub();
+        stopPoll();
+      };
     } else {
       // Stocks: no free stream — poll; Yahoo is rate-limited, 5s is plenty.
       const load = () => fetchStockTickers(symbols).then(snapshot).catch(console.error);

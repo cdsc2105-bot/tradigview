@@ -3065,16 +3065,18 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       }
     }
 
-    // Bitget is REST-only, so "live" means polling every few seconds. For the
-    // Binance venues the WS is primary and this only fires if it goes quiet.
     // Bitget's live price rides its ticker WebSocket, so REST only needs to
     // fire every ~3s for structure (new bars, volume, exact OHLC). Binance
-    // streams over WS, so its watchdog only fires if the socket goes silent.
-    const STALE_MS = exchange === "bitget" ? 3_000 : 20_000;
+    // streams klines over WS; once the stream has delivered, the watchdog only
+    // fires if it goes silent. If it never delivers — the WebSocket is blocked
+    // on this network — the chart polls every ~2.5s instead (through the server
+    // relay if needed), so it stays live either way.
+    let streamAlive = false;
+    const staleMs = () => (exchange !== "bitget" && streamAlive ? 20_000 : 2_000);
     const watchdog = setInterval(() => {
       if (document.hidden) return; // don't burn requests in background tabs
-      if (Date.now() - lastTick > STALE_MS) void resync();
-    }, exchange === "bitget" ? 3_000 : 8_000);
+      if (Date.now() - lastTick > staleMs()) void resync();
+    }, 2_500);
 
     // Waking the tab or regaining network = deep catch-up to fill any gap.
     const onWake = () => {
@@ -3190,6 +3192,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         const handleCandle = (k: Candle) => {
           if (!candleSeriesRef.current) return;
           lastTick = Date.now(); // the stream is alive — hold the watchdog off
+          streamAlive = true;
           const arr = candlesRef.current;
           const lastCandle = arr[arr.length - 1];
           if (lastCandle && lastCandle.time === k.time) {
