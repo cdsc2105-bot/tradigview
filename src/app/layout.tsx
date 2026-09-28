@@ -16,7 +16,7 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Tradiong — Gráficos cripto en vivo",
+  title: "Trading — Gráficos cripto en vivo",
   description:
     "Plataforma de charts crypto en vivo. Binance spot y perpetuos, Bitget perpetuos + lightweight-charts.",
 };

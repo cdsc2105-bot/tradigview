@@ -1,4 +1,4 @@
-# Tradiong 📈
+# Trading 📈
 
 > **Una alternativa open-source y 100% gratis a TradingView Pro, pensada para LATAM.**
 > Velas en vivo, indicadores propios, watchlist, multi-timeframe — sin pagar USD, sin login, sin ads.
@@ -113,7 +113,7 @@ Para 1000 velas y panes múltiples el costo es despreciable.
 
 ## 📺 Serie de videos
 
-Este repo es la base de la serie **"Tradiong"**:
+Este repo es la base de la serie **"Trading"**:
 
 1. ✅ **Video 1 — Base**: lo que ves acá
 2. 🔜 **Video 2 — Alertas**: Supabase + Telegram bot
