@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createChart,
-  createSeriesMarkers,
   CandlestickSeries,
   LineSeries,
   HistogramSeries,
@@ -12,10 +11,8 @@ import {
   type AutoscaleInfo,
   type IChartApi,
   type ISeriesApi,
-  type ISeriesMarkersPluginApi,
   type IPriceLine,
   type LineWidth,
-  type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
 import { fetchKlines } from "@/lib/binance/rest";
@@ -48,7 +45,6 @@ import {
 } from "@/lib/indicators";
 import type { Candle, Timeframe } from "@/lib/binance/types";
 import {
-  EXCHANGE_LABELS,
   INDICATOR_COLORS,
   ICHIMOKU_COLORS,
   CIPHER_COLORS,
@@ -78,6 +74,8 @@ import { formatVolume } from "@/lib/format";
 import { formatPriceFor, precisionFor } from "@/lib/precision";
 import { cn } from "@/lib/utils";
 import { IndicatorPill } from "./IndicatorPill";
+import { timeframeLabel } from "./TimeframeSelector";
+import { MARKET_SOURCES } from "@/components/header/MarketSourceSelect";
 import { MeasureOverlay } from "./MeasureOverlay";
 
 interface MeasurePoint {
@@ -121,14 +119,14 @@ const VOL_MA_PERIOD = 21;
  * fade — the quick "¿hay volumen o no?" read.
  */
 function volBarColor(isUp: boolean, rvol: number): string {
-  const hue = isUp ? TV_COLORS.green : TV_COLORS.red;
+  const hue = isUp ? "#c9ced8" : CANDLE_COLORS.down;
   // Kept semi-transparent so even climax bars sit behind the candles rather
   // than fighting them — still readable by relative intensity.
   const alpha =
-    rvol >= 2 ? "aa" : // climax
-    rvol >= 1.2 ? "80" : // high
-    rvol >= 0.7 ? "4d" : // normal
-    "26"; // low — faded
+    rvol >= 2 ? "cc" : // climax
+    rvol >= 1.2 ? "99" : // high
+    rvol >= 0.7 ? "66" : // normal
+    "40"; // low — faded
   return `${hue}${alpha}`;
 }
 
@@ -189,6 +187,12 @@ async function fetchCandles(
   return aggregateCandles(base, synth.bucketSeconds);
 }
 
+/**
+ * Last candles seen per venue/symbol/timeframe, so switching back to a chart
+ * paints instantly while the fresh fetch runs.
+ */
+const candleCache = new Map<string, Candle[]>();
+
 /** Candles fetched per request, and how far back we let the buffer grow. */
 const PAGE_SIZE = 1000;
 const MAX_CANDLES = 20_000;
@@ -204,6 +208,14 @@ function activeVwapBands(cfg: IndicatorConfig): VwapBand[] {
     .filter((b) => b.enabled && b.multiplier > 0)
     .sort((a, b) => a.multiplier - b.multiplier);
 }
+
+/** 0–100 oscillators keep a fixed scale so the 20/50/80 guides never drift. */
+const OSC_SCALE = {
+  autoscaleInfoProvider: (): AutoscaleInfo => ({
+    priceRange: { minValue: 0, maxValue: 100 },
+  }),
+};
+const OSC_MARGINS = { top: 0.08, bottom: 0.06 };
 
 /** Seconds each timeframe spans — drives the candle-close countdown. */
 const TF_SECONDS: Record<string, number> = {
@@ -236,18 +248,25 @@ function countdownLabel(seconds: number): string {
 }
 
 const TV_COLORS = {
-  bg: "#131722",
-  panel: "#1e222d",
-  border: "#2a2e39",
-  text: "#d1d4dc",
-  textMuted: "#787b86",
+  bg: "#070b14",
+  panel: "#131823",
+  border: "#252d3b",
+  text: "#e2e6ee",
+  textMuted: "#7d8699",
   green: "#26a69a",
   red: "#ef5350",
   blue: "#2962ff",
   yellow: "#ffb74d",
   purple: "#ab47bc",
-  grid: "#1e222d",
+  /** Clean chart: no grid, like the reference layout */
+  grid: "rgba(0,0,0,0)",
 };
+
+/** Candle palette: rising candles white, falling candles cyan. */
+const CANDLE_COLORS = {
+  up: "#e6e9ef",
+  down: "#00bcd4",
+} as const;
 
 interface HoverInfo {
   o: number;
@@ -304,6 +323,9 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const volumeMaRef = useRef<ISeriesApi<"Line"> | null>(null);
+  /** Volume-scale ceiling (≈ p90 × 1.4) and the bar count it was computed for */
+  const volumeCapRef = useRef(0);
+  const volumeCapLenRef = useRef(0);
   const ema20Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const ema50Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const ema200Ref = useRef<ISeriesApi<"Line"> | null>(null);
@@ -339,10 +361,6 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   /** Deviation-band line series, ordered upper-innermost…outer then lower-inner…outer */
   const vwapBandRefs = useRef<ISeriesApi<"Line">[]>([]);
   const vwapFillRef = useRef<BandFillPrimitive | null>(null);
-  /** End-of-line dot for the VWAP and each of its band lines */
-  const vwapDotRefs = useRef<Map<ISeriesApi<"Line">, ISeriesMarkersPluginApi<Time>>>(
-    new Map(),
-  );
   const sessionRef = useRef<SessionLinesPrimitive | null>(null);
   /** Day range + offset the session lines were last built for */
   const sessionKeyRef = useRef("");
@@ -396,8 +414,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const setSettingsTarget = useChartStore((s) => s.setSettingsTarget);
   const maximizedPane = useChartStore((s) => s.maximizedPane);
   const toggleMaximizedPane = useChartStore((s) => s.toggleMaximizedPane);
-  const rangeRequest = useChartStore((s) => s.rangeRequest);
-  const visibleRangeDays = useChartStore((s) => s.visibleRangeDays);
+  const reloadNonce = useChartStore((s) => s.reloadNonce);
 
   // Refs to avoid recreating subscribeClick on every tool change
   const toolRef = useRef(tool);
@@ -447,6 +464,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [lastPrice, setLastPrice] = useState<{ value: number; pct: number } | null>(null);
+  /** The forming candle, shown in the OHLC row whenever the cursor is off the chart */
+  const [lastBar, setLastBar] = useState<HoverInfo | null>(null);
   /** Seconds left before the forming candle closes (null off intraday) */
   const [countdown, setCountdown] = useState<number | null>(null);
   const [lastValues, setLastValues] = useState<LastValues>({});
@@ -486,6 +505,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         textColor: TV_COLORS.text,
         fontFamily: "var(--font-sans), Inter, system-ui, sans-serif",
         fontSize: 11,
+        attributionLogo: false,
         panes: { separatorColor: TV_COLORS.border, separatorHoverColor: TV_COLORS.border },
       },
       grid: {
@@ -539,13 +559,13 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     // PANE 0 — Candles + EMAs
     candleSeriesRef.current = chart.addSeries(CandlestickSeries, {
-      upColor: TV_COLORS.green,
-      downColor: TV_COLORS.red,
-      borderUpColor: TV_COLORS.green,
-      borderDownColor: TV_COLORS.red,
-      wickUpColor: TV_COLORS.green,
-      wickDownColor: TV_COLORS.red,
-      priceLineColor: TV_COLORS.textMuted,
+      upColor: CANDLE_COLORS.up,
+      downColor: CANDLE_COLORS.down,
+      borderUpColor: CANDLE_COLORS.up,
+      borderDownColor: CANDLE_COLORS.down,
+      wickUpColor: CANDLE_COLORS.up,
+      wickDownColor: CANDLE_COLORS.down,
+      priceLineColor: "#8a93a6",
       priceLineStyle: 2,
     });
 
@@ -766,7 +786,6 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       vwapRef.current = null;
       vwapBandRefs.current = [];
       vwapFillRef.current = null;
-      vwapDotRefs.current.clear();
       sessionRef.current = null;
       trendSegRef.current = null;
       wt1Ref.current = null;
@@ -789,15 +808,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           lastValueVisible: false,
           // Cap the scale near the 90th-percentile bar so a single climax spike
           // clips at the top instead of squashing every normal bar to a sliver.
+          // The cap is computed in updateVolume(), not here: this runs on every
+          // frame while panning, far too often to sort the whole history.
           autoscaleInfoProvider: (original: () => AutoscaleInfo | null) => {
             const res = original();
-            const vols = candlesRef.current
-              .map((c) => c.volume)
-              .filter((x) => x > 0)
-              .sort((a, b) => a - b);
-            if (vols.length === 0) return res;
-            const p90 = vols[Math.min(vols.length - 1, Math.floor(vols.length * 0.9))];
-            const cap = p90 * 1.4;
+            const cap = volumeCapRef.current;
+            if (!cap) return res;
             const currentMax = res?.priceRange?.maxValue ?? cap;
             return {
               priceRange: {
@@ -813,12 +829,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       // reaches up into the candles and clutters the price action.
       v.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
       volumeSeriesRef.current = v;
-      // Volume moving-average line (red), on the same volume price scale
+      // Volume moving-average line (yellow), on the same volume price scale
       volumeMaRef.current = chartRef.current.addSeries(
         LineSeries,
         {
           priceScaleId: "volume",
-          color: TV_COLORS.red,
+          color: "#e2c55a",
           lineWidth: 1,
           priceLineVisible: false,
           lastValueVisible: false,
@@ -873,6 +889,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         },
         paneIndex,
       );
+      r.applyOptions(OSC_SCALE);
+      r.priceScale().applyOptions({ scaleMargins: OSC_MARGINS });
       rsiRef.current = r;
       rsiMaRef.current = rMa;
       rsi30Ref.current = guide();
@@ -998,16 +1016,18 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (indicators.stoch && !stochKRef.current) {
       const paneIndex = 1 + (indicators.rsi ? 1 : 0) + (indicators.macd ? 1 : 0);
       stochKRef.current = chartRef.current.addSeries(LineSeries, {
+        ...OSC_SCALE,
         color: STOCH_COLORS.k,
         lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: true,
       }, paneIndex);
+      stochKRef.current.priceScale().applyOptions({ scaleMargins: OSC_MARGINS });
       stochDRef.current = chartRef.current.addSeries(LineSeries, {
         color: STOCH_COLORS.d,
         lineWidth: 1,
         priceLineVisible: false,
-        lastValueVisible: false,
+        lastValueVisible: true,
       }, paneIndex);
       stoch20Ref.current = chartRef.current.addSeries(LineSeries, {
         color: TV_COLORS.textMuted,
@@ -1055,16 +1075,18 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         (indicators.macd ? 1 : 0) +
         (indicators.stoch ? 1 : 0);
       srsiKRef.current = chartRef.current.addSeries(LineSeries, {
+        ...OSC_SCALE,
         color: STOCH_COLORS.k,
         lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: true,
       }, paneIndex);
+      srsiKRef.current.priceScale().applyOptions({ scaleMargins: OSC_MARGINS });
       srsiDRef.current = chartRef.current.addSeries(LineSeries, {
         color: STOCH_COLORS.d,
         lineWidth: 1,
         priceLineVisible: false,
-        lastValueVisible: false,
+        lastValueVisible: true,
       }, paneIndex);
       srsi20Ref.current = chartRef.current.addSeries(LineSeries, {
         color: TV_COLORS.textMuted,
@@ -1146,7 +1168,6 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     } else if (!indicators.vwap && vwapRef.current) {
       chart.removeSeries(vwapRef.current);
       vwapBandRefs.current.forEach((s) => chart.removeSeries(s));
-      vwapDotRefs.current.clear();
       vwapRef.current = null;
       vwapBandRefs.current = [];
       vwapFillRef.current?.setRegions([], false);
@@ -1163,10 +1184,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     const wanted = bands.length * 2;
     while (refs.length > wanted) {
       const s = refs.pop();
-      if (s) {
-        vwapDotRefs.current.delete(s);
-        chart.removeSeries(s);
-      }
+      if (s) chart.removeSeries(s);
     }
     while (refs.length < wanted) {
       refs.push(
@@ -1790,31 +1808,6 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Range-bar presets: frame the last N days (or everything) when the user
-  // clicks 1D / 5D / … . rangeRequest bumps on every click so re-clicking works.
-  useEffect(() => {
-    if (rangeRequest === 0) return;
-    const chart = chartRef.current;
-    const c = candlesRef.current;
-    if (!chart || c.length === 0) return;
-
-    if (visibleRangeDays === "all") {
-      chart.timeScale().fitContent();
-      return;
-    }
-    if (typeof visibleRangeDays !== "number") return;
-
-    const to = c[c.length - 1].time;
-    const from = to - visibleRangeDays * 86400;
-    try {
-      chart.timeScale().setVisibleRange({
-        from: from as UTCTimestamp,
-        to: (to + TF_SECONDS[timeframe] * 12) as UTCTimestamp, // a little right padding
-      });
-    } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rangeRequest]);
-
   // Countdown to the current candle's close — the number scalpers watch most.
   useEffect(() => {
     const span = TF_SECONDS[timeframe];
@@ -1948,6 +1941,15 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         color: volBarColor(k.close >= k.open, maAt[i] > 0 ? k.volume / maAt[i] : 1),
       })),
     );
+
+    // Scale cap near the 90th-percentile bar — only re-sorted when the bar
+    // count changes (a new candle), not on every live tick.
+    if (volumeCapLenRef.current !== c.length) {
+      volumeCapLenRef.current = c.length;
+      const vols = c.map((k) => k.volume).filter((x) => x > 0).sort((a, b) => a - b);
+      volumeCapRef.current =
+        vols.length > 0 ? vols[Math.min(vols.length - 1, Math.floor(vols.length * 0.9))] * 1.4 : 0;
+    }
 
     if (volumeMaRef.current) {
       const line: { time: UTCTimestamp; value: number }[] = [];
@@ -2203,12 +2205,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       return;
     }
 
-    // The lines only move when the loaded day range changes, so skip the (Intl-heavy)
-    // recompute on every live tick.
+    // The lines only move as time crosses into a new session, so skip the
+    // (Intl-heavy) recompute on every live tick: 15-minute granularity is plenty.
     const c = candlesRef.current;
     const first = c[0]?.time ?? 0;
     const last = c[c.length - 1]?.time ?? 0;
-    const key = `${Math.floor(first / 86_400)}:${Math.floor(last / 86_400)}:${cfg.sessionOffsetMin}`;
+    const key = `${Math.floor(first / 86_400)}:${Math.floor(last / 900)}:${cfg.sessionOffsetMin}`;
     if (key === sessionKeyRef.current) return;
     sessionKeyRef.current = key;
 
@@ -2318,7 +2320,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             { time: data[0].time as UTCTimestamp, top, bottom },
             { time: data[data.length - 1].time as UTCTimestamp, top, bottom },
           ],
-          color: hexToRgba(color, 10),
+          // Barely-there tint: the dashed 20/80 guides do the real work.
+          color: hexToRgba(color, 4),
         },
       ],
       true,
@@ -2407,38 +2410,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           value: p.vwap - band.multiplier * p.sd,
         })),
       );
-      if (last) {
-        setEndDot(upper, last.time, band.color);
-        setEndDot(lower, last.time, band.color);
-      }
     });
-    if (last) setEndDot(vwapRef.current, last.time, cfg.vwapColor);
 
     updateVWAPFill(data, bands.map((b) => b.multiplier));
     setLastValues((prev) => ({ ...prev, vwapVal: last?.vwap }));
-  }
-
-  /** Round dot on the last bar of a line, marking each level's current value. */
-  function setEndDot(
-    series: ISeriesApi<"Line"> | null | undefined,
-    time: number,
-    color: string,
-  ) {
-    if (!series) return;
-    let api = vwapDotRefs.current.get(series);
-    if (!api) {
-      api = createSeriesMarkers(series, []);
-      vwapDotRefs.current.set(series, api);
-    }
-    api.setMarkers([
-      {
-        time: time as UTCTimestamp,
-        position: "inBar",
-        shape: "circle",
-        color,
-        size: 1,
-      },
-    ]);
   }
 
   /** Shade each consecutive VWAP band (vwap→#1, #1→#2, …) above and below. */
@@ -2697,6 +2672,17 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     vwapBandRefs.current.forEach((s) => s.applyOptions(opts));
   }
 
+  /**
+   * Open on the most recent stretch (~180 bars) rather than squeezing all
+   * loaded history on screen — readable candles, like a trader zooms to.
+   */
+  function frameRecent() {
+    const n = candlesRef.current.length;
+    const ts = chartRef.current?.timeScale();
+    if (!ts || n === 0) return;
+    ts.setVisibleLogicalRange({ from: Math.max(0, n - 180), to: n + 8 });
+  }
+
   /** Push `candlesRef` into every series — candles, volume and all indicators. */
   function redrawAll() {
     const klines = candlesRef.current;
@@ -2711,6 +2697,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         close: k.close,
       })),
     );
+    updateIndicators();
+    publishLast();
+  }
+
+  /** Recompute every indicator from `candlesRef` (disabled ones are no-ops). */
+  function updateIndicators() {
     updateEMAs();
     updateVolume();
     updateRibbon();
@@ -2725,6 +2717,27 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     updateCipher();
     updateIchimoku();
     updateSessionLines();
+  }
+
+  /** Publish the latest bar to the legend (OHLC row) and the price readout. */
+  function publishLast() {
+    const arr = candlesRef.current;
+    const last = arr[arr.length - 1];
+    if (!last) return;
+    const prev = arr[arr.length - 2] ?? last;
+    setLastPrice({
+      value: last.close,
+      pct: prev.close === 0 ? 0 : ((last.close - prev.close) / prev.close) * 100,
+    });
+    setLastBar({
+      o: last.open,
+      h: last.high,
+      l: last.low,
+      c: last.close,
+      v: last.volume,
+      time: last.time,
+      pct: last.open === 0 ? 0 : ((last.close - last.open) / last.open) * 100,
+    });
   }
 
   // Load historical data + subscribe live
@@ -2796,6 +2809,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     // Synthetic timeframes (2m, 3h): the latest raw base candles, so the live
     // aggregator can rebuild the forming bucket exactly from its parts.
     const synth = SYNTHETIC_TIMEFRAMES[timeframe];
+    const cacheKey = `${exchange}:${symbol}:${timeframe}`;
     let baseTail: Candle[] = [];
     const keepBaseTail = (base: Candle[]) => {
       baseTail = base.slice(-12);
@@ -2827,16 +2841,11 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         redrawAll();
         if (!hadData) {
           // The initial load must have failed — treat this as it
-          chartRef.current?.timeScale().fitContent();
+          frameRecent();
           requestAnimationFrame(() => recomputePaneOffsets());
         }
 
-        const last = fresh[fresh.length - 1];
-        const prev = fresh[fresh.length - 2] ?? last;
-        setLastPrice({
-          value: last.close,
-          pct: prev.close === 0 ? 0 : ((last.close - prev.close) / prev.close) * 100,
-        });
+        candleCache.set(cacheKey, candlesRef.current.slice(-PAGE_SIZE));
         lastTick = Date.now();
       } catch (e) {
         console.error("Resync failed:", e);
@@ -2863,8 +2872,72 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     document.addEventListener("visibilitychange", onWake);
     window.addEventListener("online", onWake);
 
+    /**
+     * Live updates arrive far faster than the screen refreshes (every trade on
+     * busy pairs). Candles move immediately; indicator math and React state
+     * are coalesced into at most one pass per animation frame.
+     */
+    let frame = 0;
+    const scheduleRefresh = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        if (cancelled) return;
+        updateIndicators();
+        publishLast();
+      });
+    };
+
+    /** Draw the last candle as it stands in `candlesRef`. */
+    const drawLast = () => {
+      const last = candlesRef.current[candlesRef.current.length - 1];
+      if (!last || !candleSeriesRef.current) return;
+      candleSeriesRef.current.update({
+        time: last.time as UTCTimestamp,
+        open: last.open,
+        high: last.high,
+        low: last.low,
+        close: last.close,
+      });
+    };
+
+    /** Fold a live price into the forming candle (from a trade or a ticker). */
+    const applyPrice = (price: number, qty = 0, timeMs = Date.now()) => {
+      const arr = candlesRef.current;
+      const last = arr[arr.length - 1];
+      if (!last) return;
+      // Periods up to a day line up with the Unix epoch (UTC); longer ones
+      // (weekly opens on Monday) don't, so those only ever update in place.
+      const tfSec = TF_SECONDS[timeframe];
+      const bucket =
+        tfSec && tfSec <= 86_400 ? Math.floor(timeMs / 1000 / tfSec) * tfSec : last.time;
+      if (bucket < last.time) return; // stale
+      if (bucket > last.time) {
+        // New period started before its kline arrived — open it now.
+        arr.push({ time: bucket, open: price, high: price, low: price, close: price, volume: qty });
+        if (arr.length > MAX_CANDLES) arr.shift();
+      } else {
+        last.close = price;
+        last.high = Math.max(last.high, price);
+        last.low = Math.min(last.low, price);
+        last.volume += qty;
+      }
+      drawLast();
+      scheduleRefresh();
+    };
+
     async function load(attempt = 0) {
       try {
+        // Instant paint from cache when revisiting a pair/timeframe; fresh data
+        // replaces it a moment later.
+        const cached = attempt === 0 ? candleCache.get(cacheKey) : undefined;
+        if (cached) {
+          candlesRef.current = cached.slice();
+          redrawAll();
+          frameRecent();
+          requestAnimationFrame(() => recomputePaneOffsets());
+        }
+
         const klines = await fetchCandles(
           exchange,
           symbol,
@@ -2875,19 +2948,13 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         );
         if (cancelled) return;
         candlesRef.current = klines;
+        candleCache.set(cacheKey, klines.slice());
         redrawAll();
-        chartRef.current?.timeScale().fitContent();
-        requestAnimationFrame(() => recomputePaneOffsets());
-        lastTick = Date.now();
-
-        if (klines.length > 0) {
-          const last = klines[klines.length - 1];
-          const prev = klines[klines.length - 2] ?? last;
-          setLastPrice({
-            value: last.close,
-            pct: prev.close === 0 ? 0 : ((last.close - prev.close) / prev.close) * 100,
-          });
+        if (!cached) {
+          frameRecent();
+          requestAnimationFrame(() => recomputePaneOffsets());
         }
+        lastTick = Date.now();
 
         // Live candles via WebSocket — spot and futures share the protocol;
         // Bitget has no kline WebSocket, but its ticker WebSocket pushes the
@@ -2895,72 +2962,31 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         // live between the REST resyncs that fix full OHLC and add new bars.
         if (exchange === "bitget") {
           const bws = getBitgetWS();
-          unsub = bws.subscribeTickers([symbol], (t) => {
-            const arr = candlesRef.current;
-            const lastCandle = arr[arr.length - 1];
-            if (!candleSeriesRef.current || !lastCandle) return;
-            // Note: deliberately NOT resetting lastTick — the REST watchdog must
-            // still fire to create new bars and correct volume/OHLC.
-            lastCandle.close = t.lastPrice;
-            lastCandle.high = Math.max(lastCandle.high, t.lastPrice);
-            lastCandle.low = Math.min(lastCandle.low, t.lastPrice);
-            candleSeriesRef.current.update({
-              time: lastCandle.time as UTCTimestamp,
-              open: lastCandle.open,
-              high: lastCandle.high,
-              low: lastCandle.low,
-              close: lastCandle.close,
-            });
-            const prev = arr[arr.length - 2] ?? lastCandle;
-            setLastPrice({
-              value: t.lastPrice,
-              pct: prev.close === 0 ? 0 : ((t.lastPrice - prev.close) / prev.close) * 100,
-            });
-          });
+          // Note: deliberately NOT resetting lastTick — the REST watchdog must
+          // still fire to create new bars and correct volume/OHLC.
+          unsub = bws.subscribeTickers([symbol], (t) => applyPrice(t.lastPrice));
           return;
         }
+        if (exchange === "stocks") return; // polled by the watchdog
+
         const ws = exchange === "binancef" ? getBinanceFuturesWS() : getBinanceWS();
         const handleCandle = (k: Candle) => {
-            if (!candleSeriesRef.current) return;
-            lastTick = Date.now(); // the stream is alive — hold the watchdog off
-            const arr = candlesRef.current;
-            const lastCandle = arr[arr.length - 1];
-            if (lastCandle && lastCandle.time === k.time) {
-              arr[arr.length - 1] = k;
-            } else if (!lastCandle || k.time > lastCandle.time) {
-              arr.push(k);
-              // Trim only past the paging cap — a smaller cap would silently drop
-              // the history the user just scrolled back to load.
-              if (arr.length > MAX_CANDLES) arr.shift();
-            } else {
-              return;
-            }
-            candleSeriesRef.current.update({
-              time: k.time as UTCTimestamp,
-              open: k.open,
-              high: k.high,
-              low: k.low,
-              close: k.close,
-            });
-            updateEMAs();
-            updateVolume(); // recolors bars by relative volume, incl. the live one
-            updateRibbon();
-            updateRSI();
-            updateMACD();
-            updateBB();
-            updateStoch();
-            updateStochRsi();
-            updateSuperTrend();
-            updateVWAP();
-            updateWaveTrend();
-            updateCipher();
-            updateIchimoku();
-            updateSessionLines();
-            const prev = arr[arr.length - 2] ?? lastCandle;
-            setLastPrice({
-              value: k.close,
-              pct: prev && prev.close !== 0 ? ((k.close - prev.close) / prev.close) * 100 : 0,
-            });
+          if (!candleSeriesRef.current) return;
+          lastTick = Date.now(); // the stream is alive — hold the watchdog off
+          const arr = candlesRef.current;
+          const lastCandle = arr[arr.length - 1];
+          if (lastCandle && lastCandle.time === k.time) {
+            arr[arr.length - 1] = k;
+          } else if (!lastCandle || k.time > lastCandle.time) {
+            arr.push(k);
+            // Trim only past the paging cap — a smaller cap would silently drop
+            // the history the user just scrolled back to load.
+            if (arr.length > MAX_CANDLES) arr.shift();
+          } else {
+            return;
+          }
+          drawLast();
+          scheduleRefresh();
         };
 
         // 2m and 3h don't exist upstream: subscribe to the base stream (1m / 1h)
@@ -2977,11 +3003,19 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             )
           : handleCandle;
 
-        unsub = ws.subscribeKline({
+        const unsubKline = ws.subscribeKline({
           symbol,
           interval: synth ? synth.base : timeframe,
           onCandle,
         });
+        // Tick-by-tick price between kline snapshots
+        const unsubTrades = ws.subscribeTrades(symbol, (t) =>
+          applyPrice(t.price, t.qty, t.time),
+        );
+        unsub = () => {
+          unsubKline();
+          unsubTrades();
+        };
       } catch (e) {
         console.error("Failed to load chart data:", e);
         // Retry with backoff — a flaky connection must not leave a dead chart.
@@ -3003,9 +3037,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       clearInterval(watchdog);
       document.removeEventListener("visibilitychange", onWake);
       window.removeEventListener("online", onWake);
+      cancelAnimationFrame(frame);
       if (unsub) unsub();
     };
-  }, [symbol, timeframe, exchange]);
+  }, [symbol, timeframe, exchange, reloadNonce]);
 
   const greenOrRed = (n: number) =>
     n >= 0 ? "text-tv-green" : "text-tv-red";
@@ -3149,8 +3184,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         <div
           style={{ top: countdownY + 9 }}
           className={cn(
-            "pointer-events-none absolute right-1 z-20 rounded px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white",
-            lastPrice && lastPrice.pct >= 0 ? "bg-tv-green" : "bg-tv-red",
+            "pointer-events-none absolute right-1 z-20 rounded-sm bg-[#8a93a6] px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-white",
           )}
         >
           {countdownLabel(countdown)}
@@ -3160,66 +3194,118 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       {/* Top-left of main pane: symbol info + OHLC + Volume pill + EMA pills */}
       <div
         style={{ top: (paneOffsets[0]?.top ?? 0) + 12, left: 12 }}
-        className="pointer-events-none absolute z-10 flex flex-col gap-1 text-xs tabular-nums"
+        className="pointer-events-none absolute z-10 flex max-w-[calc(100%-96px)] flex-col overflow-hidden text-xs tabular-nums"
       >
-        {/* Row 1: symbol info + OHLC stats inline on hover (fixed height, never wraps) */}
-        <div className="flex h-5 flex-nowrap items-center gap-x-3 overflow-hidden whitespace-nowrap">
-          <div className="flex shrink-0 items-center gap-2 text-[13px] font-semibold">
-            <span className="text-tv-text">
-              {exchange === "stocks" ? stockLabel(symbol) : symbol}
-            </span>
-            <span className="text-tv-text-muted">·</span>
-            <span className="uppercase text-tv-text-muted">{timeframe}</span>
-            <span className="text-tv-text-muted">·</span>
-            <span className="text-tv-text-muted">{EXCHANGE_LABELS[exchange]}</span>
-          </div>
-          {hover && (
-            <div className="flex items-center gap-x-3 text-[11px]">
-              <span className="text-tv-text-muted">
-                O <span className={greenOrRed(hover.c - hover.o)}>{formatPriceFor(exchange, symbol, hover.o)}</span>
+        {/* Row 1: symbol · timeframe · venue, with a live dot */}
+        <div className="flex h-5 items-center gap-1.5 whitespace-nowrap text-[13px] text-tv-text [text-shadow:0_1px_2px_rgb(0_0_0/0.9)]">
+          <span>{exchange === "stocks" ? stockLabel(symbol) : symbol}</span>
+          <span className="text-tv-text-muted">·</span>
+          <span>{timeframeLabel(timeframe)}</span>
+          <span className="text-tv-text-muted">·</span>
+          <span className="uppercase">{MARKET_SOURCES.find((m) => m.key === exchange)?.label.replace(" · ", " ")}</span>
+          <span
+            className={cn(
+              "ml-0.5 h-2 w-2 rounded-full",
+              lastPrice ? "bg-tv-green shadow-[0_0_6px] shadow-tv-green" : "bg-tv-text-dim",
+            )}
+            title={lastPrice ? "En vivo" : "Cargando"}
+          />
+        </div>
+
+        {/* Row 2: OHLC of the hovered candle, or the forming one */}
+        {(() => {
+          const bar = hover ?? lastBar;
+          if (!bar) {
+            return <div className="h-[22px] px-1 text-[11px] text-tv-text-muted">Cargando…</div>;
+          }
+          const fmt = (n: number) => formatPriceFor(exchange, symbol, n);
+          const chg = bar.c - bar.o;
+          return (
+            <div className="flex h-[22px] items-center gap-1.5 whitespace-nowrap px-1 [text-shadow:0_1px_2px_rgb(0_0_0/0.9)]">
+              <span className="text-xs text-tv-text">OHLC</span>
+              <span className="font-mono text-[11px] text-tv-cyan">
+                O {fmt(bar.o)} H {fmt(bar.h)} L {fmt(bar.l)} C {fmt(bar.c)}
               </span>
-              <span className="text-tv-text-muted">
-                H <span className={greenOrRed(hover.c - hover.o)}>{formatPriceFor(exchange, symbol, hover.h)}</span>
-              </span>
-              <span className="text-tv-text-muted">
-                L <span className={greenOrRed(hover.c - hover.o)}>{formatPriceFor(exchange, symbol, hover.l)}</span>
-              </span>
-              <span className="text-tv-text-muted">
-                C <span className={greenOrRed(hover.c - hover.o)}>{formatPriceFor(exchange, symbol, hover.c)}</span>
-              </span>
-              {/* Absolute change then percent, the way TradingView prints it */}
-              <span className={greenOrRed(hover.pct)}>
-                {hover.c - hover.o >= 0 ? "+" : "−"}
-                {formatPriceFor(exchange, symbol, Math.abs(hover.c - hover.o))} (
-                {hover.pct >= 0 ? "+" : ""}
-                {hover.pct.toFixed(2)}%)
-              </span>
-              <span className="text-tv-text-muted">
-                Vol <span className="text-tv-text">{formatVolume(hover.v)}</span>
+              <span className={cn("font-mono text-[11px]", greenOrRed(chg))}>
+                {chg >= 0 ? "+" : "−"}
+                {fmt(Math.abs(chg))} ({bar.pct >= 0 ? "+" : ""}
+                {bar.pct.toFixed(2)}%)
               </span>
             </div>
-          )}
-        </div>
+          );
+        })()}
 
-        {/* Row 2: big live price (always present — reserves space even while loading) */}
-        <div className="flex h-7 items-center gap-2">
-          {lastPrice ? (
-            <>
-              <span className={`text-lg font-semibold tabular-nums ${greenOrRed(lastPrice.pct)}`}>
-                {formatPriceFor(exchange, symbol, lastPrice.value)}
-              </span>
-              <span className={`text-xs ${greenOrRed(lastPrice.pct)}`}>
-                {lastPrice.pct >= 0 ? "+" : ""}
-                {lastPrice.pct.toFixed(2)}%
-              </span>
-            </>
-          ) : (
-            <span className="text-xs text-tv-text-muted">Cargando…</span>
+        {/* Indicator rows for the main pane */}
+        <div className="flex flex-col items-start">
+          {indicators.vwap && (
+            <IndicatorPill
+              name="VWAP"
+              value={[
+                lastValues.vwapVal !== undefined
+                  ? formatPriceFor(exchange, symbol, lastValues.vwapVal)
+                  : undefined,
+                vwapMults.length > 0 ? `Bandas ±${vwapMults.join("/")}σ` : undefined,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              color={config.vwapColor}
+              hidden={hidden.vwap}
+              onToggleHide={() => toggleHidden("vwap")}
+              onSettings={() => setSettingsTarget("vwap")}
+              onRemove={() => removeIndicator("vwap")}
+            />
           )}
-        </div>
-
-        {/* Indicator pills for the main pane (fixed position below price) */}
-        <div className="mt-1 flex flex-col items-start gap-1">
+          {indicators.volume && (
+            <IndicatorPill
+              name="Volumen"
+              value={
+                lastValues.volume !== undefined
+                  ? `${formatVolume(lastValues.volume)} · ${(lastValues.volRvol ?? 1).toFixed(1)}x ${volStateLabel(lastValues.volRvol ?? 1)}`
+                  : undefined
+              }
+              color={
+                lastValues.volRvol !== undefined && lastValues.volRvol >= 1.2
+                  ? TV_COLORS.green
+                  : lastValues.volRvol !== undefined && lastValues.volRvol < 0.7
+                    ? TV_COLORS.textMuted
+                    : INDICATOR_COLORS.volume
+              }
+              hidden={hidden.volume}
+              onToggleHide={() => toggleHidden("volume")}
+              onSettings={() => setSettingsTarget("volume")}
+              onRemove={() => removeIndicator("volume")}
+            />
+          )}
+          {indicators.ribbon && (
+            <IndicatorPill
+              name="Medias móviles"
+              value={[
+                config.ribbonLines
+                  .filter((l) => l.enabled)
+                  .map((l) => l.period)
+                  .join(" · "),
+                ribbonBias,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              color={config.ribbonLines.find((l) => l.enabled)?.color ?? INDICATOR_COLORS.ribbon}
+              hidden={hidden.ribbon}
+              onToggleHide={() => toggleHidden("ribbon")}
+              onSettings={() => setSettingsTarget("ribbon")}
+              onRemove={() => removeIndicator("ribbon")}
+            />
+          )}
+          {indicators.session && (
+            <IndicatorPill
+              name="Sesiones de mercado"
+              value={`Nueva York ±${offsetLabel(config.sessionOffsetMin)}`}
+              color={SESSION_COLORS.open}
+              hidden={hidden.session}
+              onToggleHide={() => toggleHidden("session")}
+              onSettings={() => setSettingsTarget("session")}
+              onRemove={() => removeIndicator("session")}
+            />
+          )}
           {indicators.ema20 && (
             <IndicatorPill
               name={`EMA ${config.ema20}`}
@@ -3253,41 +3339,6 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
               onRemove={() => removeIndicator("ema200")}
             />
           )}
-          {indicators.ribbon && (
-            <IndicatorPill
-              name={`Medias móviles ${config.ribbonLines
-                .filter((l) => l.enabled)
-                .map((l) => l.period)
-                .join("/")}`}
-              value={ribbonBias}
-              color={config.ribbonLines.find((l) => l.enabled)?.color ?? INDICATOR_COLORS.ribbon}
-              hidden={hidden.ribbon}
-              onToggleHide={() => toggleHidden("ribbon")}
-              onSettings={() => setSettingsTarget("ribbon")}
-              onRemove={() => removeIndicator("ribbon")}
-            />
-          )}
-          {indicators.volume && (
-            <IndicatorPill
-              name="Vol"
-              value={
-                lastValues.volume !== undefined
-                  ? `${formatVolume(lastValues.volume)} · ${(lastValues.volRvol ?? 1).toFixed(1)}x ${volStateLabel(lastValues.volRvol ?? 1)}`
-                  : undefined
-              }
-              color={
-                lastValues.volRvol !== undefined && lastValues.volRvol >= 1.2
-                  ? TV_COLORS.green
-                  : lastValues.volRvol !== undefined && lastValues.volRvol < 0.7
-                    ? TV_COLORS.textMuted
-                    : INDICATOR_COLORS.volume
-              }
-              hidden={hidden.volume}
-              onToggleHide={() => toggleHidden("volume")}
-              onSettings={() => setSettingsTarget("volume")}
-              onRemove={() => removeIndicator("volume")}
-            />
-          )}
           {indicators.bb && (
             <IndicatorPill
               name={`BB ${config.bbPeriod}, ${config.bbStdDev}`}
@@ -3312,32 +3363,6 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
               onToggleHide={() => toggleHidden("supertrend")}
               onSettings={() => setSettingsTarget("supertrend")}
               onRemove={() => removeIndicator("supertrend")}
-            />
-          )}
-          {indicators.vwap && (
-            <IndicatorPill
-              name={
-                vwapMults.length > 0
-                  ? `VWAP ±${vwapMults.join("/")}σ`
-                  : "VWAP"
-              }
-              value={lastValues.vwapVal !== undefined ? formatPriceFor(exchange, symbol, lastValues.vwapVal) : undefined}
-              color={config.vwapColor}
-              hidden={hidden.vwap}
-              onToggleHide={() => toggleHidden("vwap")}
-              onSettings={() => setSettingsTarget("vwap")}
-              onRemove={() => removeIndicator("vwap")}
-            />
-          )}
-          {indicators.session && (
-            <IndicatorPill
-              name="Sesión NY"
-              value={`OPEN ±${offsetLabel(config.sessionOffsetMin)}`}
-              color={SESSION_COLORS.open}
-              hidden={hidden.session}
-              onToggleHide={() => toggleHidden("session")}
-              onSettings={() => setSettingsTarget("session")}
-              onRemove={() => removeIndicator("session")}
             />
           )}
           {indicators.ichimoku && (

@@ -11,12 +11,15 @@ Plataforma de charts construida sobre los datos públicos de **Binance** (REST +
 
 - 📊 **Velas en vivo** vía WebSocket de Binance (sin API key)
 - 🔍 **Buscador de monedas** sobre todos los pares USDT del exchange
-- ⏱️ **Temporalidades**: 15m · 1H · 2H · 3H · 4H · 1D (3H se arma a partir de velas de 1H, Binance no la ofrece)
-- 📐 **Menú de indicadores**
+- 🗂️ **Dos vistas**: *VWAP* (VWAP + bandas, RSI, Stoch RSI) y *Normal* (medias móviles + Cipher WaveTrend); cada una recuerda sus indicadores
+- ⏱️ **Temporalidades**: 15m · 1H · 2H · 3H · 4H · 1D, más 1m/5m/30m/1W en el desplegable (3H se arma a partir de velas de 1H, Binance no la ofrece)
+- ⚡ **Tiempo real tick a tick**: el precio se mueve con cada trade (stream `aggTrade`), los indicadores se recalculan una vez por frame y los gráficos ya vistos abren al instante desde caché
+- 📐 **Menú de indicadores** con interruptores y engranaje para editar cada uno
   - **Precio**: VWAP + bandas σ, Volumen, Medias móviles, Sesión Nueva York
   - **Osciladores**: RSI (con media y divergencias), Stoch RSI, Cipher WaveTrend (tipo VuManChu Cipher B con money flow, puntos de cruce, círculos de compra/venta/oro y divergencias)
   - **Más**: EMA, Estocástico, MACD, Bollinger, SuperTrend, Ichimoku
-- 👁️ **Watchlist** con precios y cambio 24h actualizándose en tiempo real
+- 👁️ **Favoritos** del mercado activo con precio y cambio 24h en tiempo real
+- 📱 **Móvil**: barra inferior Gráfico · Mercados · Indicadores · Herramientas · Más
 - 💾 **Persistencia** en localStorage (símbolo, temporalidad, indicadores)
 - 🔌 **Reconexión robusta** del WebSocket con backoff exponencial
 - 🌐 100% client-side — deploy estático en Vercel/Cloudflare
@@ -53,19 +56,23 @@ src/
 │   └── globals.css         # Paleta oscura
 ├── components/
 │   ├── brand/
-│   │   └── Logo.tsx           # Marca Trading
+│   │   ├── Logo.tsx           # Marca Trading
+│   │   └── CoinIcon.tsx       # Iconos neutros de monedas
 │   ├── chart/
 │   │   ├── PriceChart.tsx     # Chart core (lightweight-charts + panes)
 │   │   ├── SymbolSelector.tsx # Búsqueda de pares USDT
 │   │   ├── TimeframeSelector.tsx
 │   │   └── IndicatorMenu.tsx  # Precio / Osciladores / Más indicadores
 │   ├── layout/
-│   │   ├── Header.tsx
+│   │   ├── Header.tsx         # Marca · vista · buscador · mercado · temporalidad · indicadores
+│   │   ├── MobileTabBar.tsx   # Navegación inferior en el celular
 │   │   ├── LeftSidebar.tsx    # Iconos drawing tools (visual)
-│   │   ├── RightSidebar.tsx
-│   │   └── BottomPanel.tsx    # Stats 24h
+│   │   └── RightSidebar.tsx
+│   ├── header/
+│   │   ├── LayoutSwitch.tsx   # VWAP / Normal
+│   │   └── MarketSourceSelect.tsx
 │   ├── watchlist/
-│   │   └── Watchlist.tsx      # Precios live multi-símbolo
+│   │   └── Watchlist.tsx      # Favoritos del mercado activo
 │   └── ui/                    # shadcn primitives
 └── lib/
     ├── binance/

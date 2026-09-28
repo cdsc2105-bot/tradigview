@@ -1,6 +1,6 @@
 "use client";
 
-import { MousePointer2, Minus, Ruler, Trash2, TrendingUp, Eraser, Lock } from "lucide-react";
+import { MousePointer2, Minus, Ruler, Trash2, TrendingUp, Eraser } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChartStore, type DrawingTool } from "@/lib/store/chart-store";
 import { cn } from "@/lib/utils";
@@ -12,7 +12,7 @@ interface ToolDef {
   hint?: string;
 }
 
-const TOOLS: ToolDef[] = [
+export const TOOLS: ToolDef[] = [
   { key: "cursor", icon: MousePointer2, label: "Cursor", hint: "Modo navegación" },
   {
     key: "hline",
@@ -40,8 +40,6 @@ const TOOLS: ToolDef[] = [
   },
 ];
 
-const LOCKED = [{ label: "Fibonacci" }, { label: "Texto" }];
-
 export function LeftSidebar() {
   const tool = useChartStore((s) => s.tool);
   const setTool = useChartStore((s) => s.setTool);
@@ -49,7 +47,7 @@ export function LeftSidebar() {
   const symbol = useChartStore((s) => s.symbol);
 
   return (
-    <aside className="flex w-11 flex-col items-center gap-0.5 border-r border-tv-border bg-tv-panel py-1.5">
+    <aside className="flex w-[46px] flex-col items-center gap-1 border-r border-tv-border bg-tv-panel py-2">
       {TOOLS.map((t) => {
         const Icon = t.icon;
         const active = tool === t.key;
@@ -59,13 +57,13 @@ export function LeftSidebar() {
               onClick={() => setTool(t.key)}
               aria-label={t.label}
               className={cn(
-                "flex h-8 w-8 items-center justify-center rounded transition-colors hover:bg-tv-panel-hover",
+                "flex h-9 w-9 items-center justify-center rounded-md transition-colors hover:bg-tv-panel-hover",
                 active
-                  ? "bg-tv-blue/15 text-tv-blue"
+                  ? "bg-tv-accent/15 text-tv-accent"
                   : "text-tv-text-muted hover:text-tv-text",
               )}
             >
-              <Icon className="h-4 w-4" />
+              <Icon className="h-[18px] w-[18px]" strokeWidth={1.6} />
             </TooltipTrigger>
             <TooltipContent side="right" className="text-xs">
               <div className="font-medium">{t.label}</div>
@@ -81,9 +79,9 @@ export function LeftSidebar() {
         <TooltipTrigger
           onClick={() => clearPriceLines(symbol)}
           aria-label="Borrar dibujos"
-          className="flex h-8 w-8 items-center justify-center rounded text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-red"
+          className="flex h-9 w-9 items-center justify-center rounded-md text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-red"
         >
-          <Trash2 className="h-4 w-4" />
+          <Trash2 className="h-[18px] w-[18px]" strokeWidth={1.6} />
         </TooltipTrigger>
         <TooltipContent side="right" className="text-xs">
           <div className="font-medium">Borrar todos los dibujos</div>
@@ -94,25 +92,6 @@ export function LeftSidebar() {
         </TooltipContent>
       </Tooltip>
 
-      <div className="my-1 h-px w-6 bg-tv-border" />
-
-      {LOCKED.map((t) => (
-        <Tooltip key={t.label}>
-          <TooltipTrigger
-            disabled
-            aria-label={t.label}
-            className="flex h-8 w-8 cursor-not-allowed items-center justify-center rounded text-tv-text-dim opacity-40"
-          >
-            <Lock className="h-3.5 w-3.5" />
-          </TooltipTrigger>
-          <TooltipContent side="right" className="text-xs">
-            <div className="font-medium">{t.label}</div>
-            <div className="mt-0.5 text-[10px] text-tv-yellow">
-              Próximamente · video 3
-            </div>
-          </TooltipContent>
-        </Tooltip>
-      ))}
     </aside>
   );
 }

@@ -1,45 +1,54 @@
 "use client";
 
-import { ListOrdered } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { BRAND_NAME, LogoMark } from "@/components/brand/Logo";
 import { SymbolSelector } from "@/components/chart/SymbolSelector";
 import { TimeframeSelector } from "@/components/chart/TimeframeSelector";
 import { IndicatorMenu } from "@/components/chart/IndicatorMenu";
-import { Separator } from "@/components/ui/separator";
+import { LayoutSwitch } from "@/components/header/LayoutSwitch";
+import { MarketSourceSelect } from "@/components/header/MarketSourceSelect";
 import { useChartStore } from "@/lib/store/chart-store";
 
+/**
+ * Top bar: brand · layout · symbol search · market · refresh · timeframes ·
+ * indicators. On phones the secondary controls move to the bottom tab bar.
+ */
 export function Header() {
-  const setWatchlistOpen = useChartStore((s) => s.setWatchlistOpen);
+  const reload = useChartStore((s) => s.reload);
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-1 border-b border-tv-border bg-tv-panel px-2 md:px-3">
-      {/* Logo — full on desktop, just the mark on phones */}
-      <div className="flex shrink-0 items-center gap-2 pr-1 md:pr-2">
-        <LogoMark className="h-7 w-7" />
-        <span className="hidden text-sm font-semibold tracking-tight text-tv-text sm:inline">
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-tv-border bg-tv-panel px-2 md:px-3">
+      <div className="flex shrink-0 items-center gap-2 pr-1">
+        <LogoMark className="h-6 w-6" />
+        <span className="hidden text-[15px] font-semibold tracking-tight text-tv-text lg:inline">
           {BRAND_NAME}
         </span>
       </div>
 
-      <Separator orientation="vertical" className="hidden h-6 bg-tv-border sm:block" />
+      <div className="hidden h-6 w-px shrink-0 bg-tv-border lg:block" />
 
-      {/* Controls — scroll horizontally on small screens instead of wrapping */}
-      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-none">
+      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto scrollbar-none">
+        <div className="hidden md:block">
+          <LayoutSwitch />
+        </div>
         <SymbolSelector />
-        <Separator orientation="vertical" className="h-6 shrink-0 bg-tv-border" />
+        <div className="hidden md:block">
+          <MarketSourceSelect />
+        </div>
+        <button
+          type="button"
+          onClick={reload}
+          title="Recargar datos"
+          aria-label="Recargar datos"
+          className="hidden shrink-0 rounded-md p-1.5 text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text md:block"
+        >
+          <RefreshCw className="h-4 w-4" />
+        </button>
         <TimeframeSelector />
-        <Separator orientation="vertical" className="mx-0.5 h-6 shrink-0 bg-tv-border" />
-        <IndicatorMenu />
+        <div className="hidden md:block">
+          <IndicatorMenu />
+        </div>
       </div>
-
-      {/* Mobile: open the watchlist drawer */}
-      <button
-        onClick={() => setWatchlistOpen(true)}
-        className="flex shrink-0 items-center gap-1.5 rounded px-2 py-1.5 text-xs text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text md:hidden"
-        aria-label="Abrir watchlist"
-      >
-        <ListOrdered className="h-4 w-4" />
-      </button>
     </header>
   );
 }

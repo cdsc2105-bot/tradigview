@@ -30,19 +30,23 @@ export function IndicatorPill({
   return (
     <div
       className={cn(
-        "group/pill pointer-events-auto flex items-center gap-1.5 rounded bg-tv-panel/95 px-1.5 py-0.5 text-[11px] shadow-sm ring-1 ring-tv-border backdrop-blur",
-        hidden && "opacity-50",
+        "group/pill pointer-events-auto flex h-[22px] items-center gap-1.5 rounded px-1 text-xs [text-shadow:0_1px_2px_rgb(0_0_0/0.9)] hover:bg-tv-panel/80",
+        hidden && "opacity-45",
       )}
     >
       <span
-        className="h-1.5 w-1.5 shrink-0 rounded-full"
+        className="h-[2px] w-3 shrink-0 rounded-full"
         style={{ background: color }}
       />
-      <span className="font-medium text-tv-text">{name}</span>
+      <span className="whitespace-nowrap text-tv-text">{name}</span>
       {value !== undefined && (
-        <span className="tabular-nums text-tv-text-muted">{value}</span>
+        <span className="hidden whitespace-nowrap font-mono text-[11px] tabular-nums text-tv-text-muted md:inline">
+          {value}
+        </span>
       )}
-      <div className="ml-1 flex items-center gap-0.5">
+      {/* Actions stay out of the way until hovered; on phones they live in the
+          Indicadores sheet instead, keeping the chart clean */}
+      <div className="ml-0.5 hidden items-center gap-0.5 opacity-0 transition-opacity group-hover/pill:opacity-100 md:flex">
         {onMaximize && (
           <button
             onClick={onMaximize}

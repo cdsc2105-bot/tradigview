@@ -40,7 +40,25 @@ interface MiniTickerMsg {
   };
 }
 
-type WSMsg = KlineMsg | MiniTickerMsg;
+interface AggTradeMsg {
+  stream: string;
+  data: {
+    e: string;
+    s: string;
+    p: string; // price
+    q: string; // quantity
+    T: number; // trade time (ms)
+  };
+}
+
+type WSMsg = KlineMsg | MiniTickerMsg | AggTradeMsg;
+
+export interface Trade {
+  price: number;
+  qty: number;
+  /** Trade time, unix ms */
+  time: number;
+}
 
 export interface KlineSubscription {
   symbol: string;
@@ -64,6 +82,7 @@ export class BinanceWS {
   private nextId = 1;
   private klineSubs = new Map<string, KlineSubscription>();
   private tickerSubs = new Map<string, (m: MiniTickerMsg["data"]) => void>();
+  private tradeSubs = new Map<string, (t: Trade) => void>();
   private connected = false;
   private closing = false;
 
@@ -82,6 +101,7 @@ export class BinanceWS {
         streams.push(`${s.symbol.toLowerCase()}@kline_${s.interval}`);
       });
       this.tickerSubs.forEach((_v, k) => streams.push(k));
+      this.tradeSubs.forEach((_v, k) => streams.push(k));
       if (streams.length > 0) this.send({ method: "SUBSCRIBE", params: streams, id: this.nextId++ });
     };
 
@@ -133,6 +153,10 @@ export class BinanceWS {
         volume: parseFloat(k.v),
         isFinal: k.x,
       });
+    } else if (msg.stream.includes("@aggTrade")) {
+      const handler = this.tradeSubs.get(msg.stream);
+      const d = (msg as AggTradeMsg).data;
+      if (handler) handler({ price: parseFloat(d.p), qty: parseFloat(d.q), time: d.T });
     } else if (msg.stream.includes("@miniTicker")) {
       const handler = this.tickerSubs.get(msg.stream);
       if (handler) handler((msg as MiniTickerMsg).data);
@@ -145,6 +169,20 @@ export class BinanceWS {
     if (this.connected) this.send({ method: "SUBSCRIBE", params: [stream], id: this.nextId++ });
     return () => {
       this.klineSubs.delete(stream);
+      if (this.connected) this.send({ method: "UNSUBSCRIBE", params: [stream], id: this.nextId++ });
+    };
+  }
+
+  /**
+   * Every trade as it prints (aggregated per price by Binance) — lets the chart
+   * move tick by tick instead of waiting for the ~1s kline snapshot.
+   */
+  subscribeTrades(symbol: string, onTrade: (t: Trade) => void): () => void {
+    const stream = `${symbol.toLowerCase()}@aggTrade`;
+    this.tradeSubs.set(stream, onTrade);
+    if (this.connected) this.send({ method: "SUBSCRIBE", params: [stream], id: this.nextId++ });
+    return () => {
+      this.tradeSubs.delete(stream);
       if (this.connected) this.send({ method: "UNSUBSCRIBE", params: [stream], id: this.nextId++ });
     };
   }

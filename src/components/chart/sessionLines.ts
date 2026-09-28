@@ -16,6 +16,8 @@ export interface SessionLine {
   time: UTCTimestamp;
   label: string;
   color: string;
+  /** Flanking markers are dashed; the open itself is solid */
+  dashed: boolean;
 }
 
 /**
@@ -56,18 +58,20 @@ export class SessionLinesPrimitive implements ISeriesPrimitive<Time> {
   }
 
   /** Screen x of each line; lines scrolled out of view resolve to null and are dropped. */
-  linePoints(): { x: number; label: string; color: string }[] | null {
+  linePoints(): LinePoint[] | null {
     if (!this._visible || !this._chart || this._lines.length === 0) return null;
     const timeScale = this._chart.timeScale();
-    const out: { x: number; label: string; color: string }[] = [];
+    const out: LinePoint[] = [];
     for (const line of this._lines) {
       const x = timeScale.timeToCoordinate(line.time);
       if (x === null) continue;
-      out.push({ x, label: line.label, color: line.color });
+      out.push({ x, label: line.label, color: line.color, dashed: line.dashed });
     }
     return out.length > 0 ? out : null;
   }
 }
+
+type LinePoint = { x: number; label: string; color: string; dashed: boolean };
 
 class SessionLinesPaneView implements IPrimitivePaneView {
   constructor(private readonly _source: SessionLinesPrimitive) {}
@@ -84,31 +88,34 @@ class SessionLinesPaneView implements IPrimitivePaneView {
 }
 
 class SessionLinesRenderer implements IPrimitivePaneRenderer {
-  constructor(
-    private readonly _lines: { x: number; label: string; color: string }[],
-  ) {}
+  constructor(private readonly _lines: LinePoint[]) {}
 
   draw(target: DrawTarget): void {
     target.useMediaCoordinateSpace((scope) => {
       const ctx = scope.context;
       const height = scope.mediaSize.height;
 
-      for (const { x, label, color } of this._lines) {
+      for (const { x, label, color, dashed } of this._lines) {
+        // Zoomed out, the three markers bunch up: keep the lines but drop the
+        // flank labels rather than print them on top of each other.
+        const crowded = dashed && this._lines.some((o) => o.x !== x && Math.abs(o.x - x) < 44);
         ctx.save();
         ctx.beginPath();
-        ctx.setLineDash([4, 4]);
+        ctx.setLineDash(dashed ? [4, 4] : []);
         ctx.strokeStyle = color;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = dashed ? 1 : 1.5;
         ctx.moveTo(x, 0);
         ctx.lineTo(x, height);
         ctx.stroke();
 
         ctx.setLineDash([]);
         ctx.fillStyle = color;
-        ctx.font = "11px system-ui, sans-serif";
+        ctx.font = "11px Inter, system-ui, sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        ctx.fillText(label, x, 6);
+        // The open's label sits a line lower so it never collides with the
+        // flanking markers when the chart is zoomed out.
+        if (!crowded) ctx.fillText(label, x, dashed ? 6 : 20);
         ctx.restore();
       }
     });
@@ -155,11 +162,15 @@ const NY_TZ = "America/New_York";
 /** New York cash open: 09:30 local — the "OPEN" everyone trades around. */
 const OPEN_HOUR = 9;
 const OPEN_MINUTE = 30;
-/** Enough days to cover a deep intraday history without drawing thousands of lines. */
-const MAX_DAYS = 250;
+/** Local clock time of an instant, "13:30". */
+function localHHMM(tsSec: number): string {
+  const d = new Date(tsSec * 1000);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
 
 /**
- * The New York open for every day the candles span, plus the flanking markers.
+ * The most recent New York session: its open plus the flanking markers. Only
+ * the latest one is drawn — a line per day turns the chart into a barcode.
  *
  * Only meaningful intraday — on a daily chart or above the lines would land on
  * (or between) whole bars, so callers get an empty list back.
@@ -178,36 +189,31 @@ export function sessionLines(
   const last = candles[candles.length - 1].time;
   const offset = offsetMinutes * 60;
 
-  const out: SessionLine[] = [];
-  const startDay = Math.max(
-    Math.floor(first / 86_400),
-    Math.floor(last / 86_400) - MAX_DAYS,
-  );
-  const endDay = Math.floor(last / 86_400);
+  const span = offsetLabel(offsetMinutes);
+  const startDay = Math.floor(first / 86_400);
 
-  for (let day = startDay; day <= endDay; day++) {
+  // Walk back from the last loaded day to the first whose session has begun.
+  for (let day = Math.floor(last / 86_400); day >= startDay; day--) {
     const midnightUtc = day * 86_400;
     // The UTC instant of the NY open depends on whether that day is in DST, so
     // read the zone's real offset around the open rather than assuming −5h.
     const nyOffset = tzOffsetSeconds(midnightUtc + 13 * 3600, NY_TZ);
     const open = midnightUtc + OPEN_HOUR * 3600 + OPEN_MINUTE * 60 - nyOffset;
-
-    const span = offsetLabel(offsetMinutes);
+    if (open - offset > last) continue; // today's session hasn't started yet
 
     const marks: SessionLine[] = [
-      { time: (open - offset) as UTCTimestamp, label: `-${span}`, color: colors.flank },
-      { time: open as UTCTimestamp, label: "OPEN", color: colors.open },
-      { time: (open + offset) as UTCTimestamp, label: `+${span}`, color: colors.flank },
+      { time: (open - offset) as UTCTimestamp, label: `-${span}`, color: colors.flank, dashed: true },
+      { time: open as UTCTimestamp, label: `Apertura ${localHHMM(open)}`, color: colors.open, dashed: false },
+      { time: (open + offset) as UTCTimestamp, label: `+${span}`, color: colors.flank, dashed: true },
     ];
 
-    for (const mark of marks) {
-      if (mark.time < first || mark.time > last + barSeconds * 30) continue;
-      // Snap to the bar that contains the instant — the line has to sit on a real
-      // bar's timestamp or timeToCoordinate() can't place it.
-      const snapped = Math.floor(mark.time / barSeconds) * barSeconds;
-      out.push({ ...mark, time: snapped as UTCTimestamp });
-    }
+    // Snap to the bar that contains the instant — the line has to sit on a real
+    // bar's timestamp or timeToCoordinate() can't place it. Marks still in the
+    // future (past the last bar) can't be placed and are left out.
+    return marks
+      .filter((m) => m.time >= first && m.time <= last + barSeconds)
+      .map((m) => ({ ...m, time: (Math.floor(m.time / barSeconds) * barSeconds) as UTCTimestamp }));
   }
 
-  return out;
+  return [];
 }

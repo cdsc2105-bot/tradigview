@@ -33,6 +33,55 @@ export type IndicatorKey =
   | "stochrsi"
   | "cipher";
 
+/**
+ * Chart layouts, switched from the header. Each one remembers its own set of
+ * indicators: "VWAP" is the intraday desk (VWAP bands + RSI + Stoch RSI),
+ * "Normal" the swing view (moving averages + Cipher WaveTrend).
+ */
+export type LayoutKey = "vwap" | "normal";
+
+export const LAYOUT_LABELS: Record<LayoutKey, string> = {
+  vwap: "VWAP",
+  normal: "Normal",
+};
+
+const NO_INDICATORS: Record<IndicatorKey, boolean> = {
+  ema20: false,
+  ema50: false,
+  ema200: false,
+  rsi: false,
+  macd: false,
+  volume: false,
+  bb: false,
+  stoch: false,
+  supertrend: false,
+  vwap: false,
+  wavetrend: false,
+  ribbon: false,
+  ichimoku: false,
+  session: false,
+  stochrsi: false,
+  cipher: false,
+};
+
+export const LAYOUT_PRESETS: Record<LayoutKey, Record<IndicatorKey, boolean>> = {
+  vwap: {
+    ...NO_INDICATORS,
+    vwap: true,
+    volume: true,
+    ribbon: true,
+    session: true,
+    rsi: true,
+    stochrsi: true,
+  },
+  normal: {
+    ...NO_INDICATORS,
+    volume: true,
+    ribbon: true,
+    cipher: true,
+  },
+};
+
 /** Timeframes that get a button in the header, in display order. */
 export const TIMEFRAME_BUTTONS: Timeframe[] = ["15m", "1h", "2h", "3h", "4h", "1d"];
 
@@ -133,15 +182,15 @@ export interface VwapBand {
 
 export const MAX_VWAP_BANDS = 4;
 
-/** Default band colors: 1σ green, 2σ olive, 3σ cyan. */
+/** Default band colors: 1σ green, 2σ amber, 3σ red. */
 export const DEFAULT_VWAP_BANDS: VwapBand[] = [
-  { multiplier: 1, enabled: true, color: "#26a69a" },
-  { multiplier: 2, enabled: true, color: "#b0a83b" },
-  { multiplier: 3, enabled: true, color: "#4dd0e1" },
+  { multiplier: 1, enabled: true, color: "#4caf50" },
+  { multiplier: 2, enabled: true, color: "#d4a73a" },
+  { multiplier: 3, enabled: true, color: "#ef4b5a" },
 ];
 
 /** Fallback color for a band the user added past the presets. */
-export const VWAP_BAND_PALETTE = ["#26a69a", "#b0a83b", "#4dd0e1", "#ab47bc"];
+export const VWAP_BAND_PALETTE = ["#4caf50", "#d4a73a", "#ef4b5a", "#ab47bc"];
 
 /** One configurable line of the EMA ribbon. */
 export interface RibbonLine {
@@ -155,20 +204,18 @@ export interface RibbonLine {
 export const MAX_RIBBON_LINES = 8;
 
 export const DEFAULT_RIBBON_LINES: RibbonLine[] = [
-  { period: 9, color: "#22d3ee", width: 1, enabled: true },
-  { period: 21, color: "#2962ff", width: 1, enabled: true },
-  { period: 50, color: "#26a69a", width: 2, enabled: true },
-  { period: 100, color: "#ffb74d", width: 2, enabled: true },
-  { period: 200, color: "#ef5350", width: 2, enabled: true },
+  { period: 20, color: "#4caf50", width: 1, enabled: true },
+  { period: 50, color: "#ff9800", width: 1, enabled: true },
+  { period: 200, color: "#3d6ef5", width: 1, enabled: true },
 ];
 
 export const DEFAULT_CONFIG: IndicatorConfig = {
   ema20: 20,
   ema50: 50,
   ema200: 200,
-  // 7 (not the classic 14): the RSI plunges deep into the oversold zone on
+  // 6 (not the classic 14): the RSI plunges deep into the oversold zone on
   // sharp moves — the shorter period is what makes it reactive.
-  rsi: 7,
+  rsi: 6,
   macdFast: 12,
   macdSlow: 26,
   macdSignal: 9,
@@ -187,13 +234,13 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   wtAvg: 12,
   wtSignal: 3,
   ribbonLines: DEFAULT_RIBBON_LINES,
-  ribbonFill: true,
+  ribbonFill: false,
   ribbonFillOpacity: 10,
-  vwapColor: "#2962ff",
-  vwapFillColor: "#26a69a",
+  vwapColor: "#3d6ef5",
+  vwapFillColor: "#4caf50",
   vwapBandLines: DEFAULT_VWAP_BANDS,
   vwapFill: true,
-  vwapFillOpacity: 8,
+  vwapFillOpacity: 6,
   rsiDiv: true,
   rsiDivLeft: 5,
   rsiDivRight: 5,
@@ -276,8 +323,8 @@ export const RSI_COLORS = {
 
 /** Colors of the three session lines. */
 export const SESSION_COLORS = {
-  open: "#9c27b0", // purple — the New York open itself
-  flank: "#2962ff", // blue — the −1h30 / +1h30 markers
+  open: "#7e57c2", // purple — the New York open itself
+  flank: "#aab1bf", // light gray — the −1h30 / +1h30 markers
 } as const;
 
 /**
@@ -363,6 +410,10 @@ interface ChartState {
   /** Periods and parameters for each indicator */
   config: IndicatorConfig;
   watchlist: string[];
+  /** Active chart layout */
+  layout: LayoutKey;
+  /** Indicator set each layout had when the user last left it */
+  layoutIndicators: Partial<Record<LayoutKey, Record<IndicatorKey, boolean>>>;
 
   // Ephemeral UI state (not persisted)
   tool: DrawingTool;
@@ -375,15 +426,17 @@ interface ChartState {
   settingsTarget: IndicatorKey | null;
   /** Pane indicator currently blown up big (null = normal layout) */
   maximizedPane: IndicatorKey | null;
-  /** Range-bar preset: days of history to frame, "all", or a request nonce */
-  visibleRangeDays: number | "all" | null;
-  /** Bumped on each range click so the same button re-triggers the zoom */
-  rangeRequest: number;
+  /** Bumped by the refresh button to reload the chart data */
+  reloadNonce: number;
 
   // Actions
   setSymbol: (s: string) => void;
   setExchange: (e: Exchange) => void;
   setTimeframe: (t: Timeframe) => void;
+  /** Switch layout, saving the current indicator set under the old one */
+  setLayout: (l: LayoutKey) => void;
+  /** Refetch the chart data from scratch */
+  reload: () => void;
   toggleIndicator: (key: IndicatorKey) => void;
   removeIndicator: (key: IndicatorKey) => void;
   toggleHidden: (key: IndicatorKey) => void;
@@ -415,8 +468,6 @@ interface ChartState {
   setSettingsTarget: (k: IndicatorKey | null) => void;
   /** Toggle a pane between big and normal (same key twice = restore) */
   toggleMaximizedPane: (k: IndicatorKey) => void;
-  /** Frame N days of history (or "all"); the chart reads rangeRequest to fire */
-  setVisibleRangeDays: (d: number | "all") => void;
 }
 
 export const useChartStore = create<ChartState>()(
@@ -425,24 +476,9 @@ export const useChartStore = create<ChartState>()(
       symbol: "BTCUSDT",
       exchange: "binance" as Exchange,
       timeframe: "15m" as Timeframe,
-      indicators: {
-        ema20: false,
-        ema50: false,
-        ema200: false,
-        rsi: true,
-        macd: false,
-        volume: true,
-        bb: false,
-        stoch: false,
-        supertrend: false,
-        vwap: true,
-        wavetrend: false,
-        ribbon: true,
-        ichimoku: false,
-        session: true,
-        stochrsi: true,
-        cipher: false,
-      },
+      indicators: { ...LAYOUT_PRESETS.vwap },
+      layout: "vwap" as LayoutKey,
+      layoutIndicators: {},
       hidden: {
         ema20: false,
         ema50: false,
@@ -474,12 +510,25 @@ export const useChartStore = create<ChartState>()(
       watchlistOpen: false,
       settingsTarget: null,
       maximizedPane: null,
-      visibleRangeDays: null,
-      rangeRequest: 0,
+      reloadNonce: 0,
 
       setSymbol: (symbol) => set({ symbol }),
       setExchange: (exchange) => set({ exchange }),
       setTimeframe: (timeframe) => set({ timeframe }),
+      setLayout: (layout) =>
+        set((s) => {
+          if (layout === s.layout) return s;
+          return {
+            layout,
+            layoutIndicators: { ...s.layoutIndicators, [s.layout]: s.indicators },
+            indicators: {
+              ...NO_INDICATORS,
+              ...(s.layoutIndicators[layout] ?? LAYOUT_PRESETS[layout]),
+            },
+            maximizedPane: null,
+          };
+        }),
+      reload: () => set((s) => ({ reloadNonce: s.reloadNonce + 1 })),
       toggleIndicator: (key) =>
         set((s) => ({
           indicators: { ...s.indicators, [key]: !s.indicators[key] },
@@ -657,8 +706,6 @@ export const useChartStore = create<ChartState>()(
       setSettingsTarget: (settingsTarget) => set({ settingsTarget }),
       toggleMaximizedPane: (k) =>
         set((s) => ({ maximizedPane: s.maximizedPane === k ? null : k })),
-      setVisibleRangeDays: (d) =>
-        set((s) => ({ visibleRangeDays: d, rangeRequest: s.rangeRequest + 1 })),
     }),
     {
       name: "tv-gratis-chart-state",
@@ -671,7 +718,9 @@ export const useChartStore = create<ChartState>()(
       // v6 adds stocks & indices to the watchlist.
       // v7 sets the default layout (VWAP, volume, MAs, RSI, Stoch RSI) and
       // moves timeframes that no longer have a button back to 15m.
-      version: 7,
+      // v8 restyles to the clean look: VWAP bands green/amber/red, MAs
+      // 20/50/200 without fill, RSI 6.
+      version: 8,
       migrate: (persisted, version) => {
         const p = (persisted ?? {}) as Partial<ChartState>;
         let migrated =
@@ -758,6 +807,21 @@ export const useChartStore = create<ChartState>()(
             } as ChartState["indicators"],
           };
         }
+        if (version < 8) {
+          migrated = {
+            ...migrated,
+            config: {
+              ...migrated.config,
+              rsi: DEFAULT_CONFIG.rsi,
+              vwapColor: DEFAULT_CONFIG.vwapColor,
+              vwapFillColor: DEFAULT_CONFIG.vwapFillColor,
+              vwapBandLines: DEFAULT_VWAP_BANDS.map((b) => ({ ...b })),
+              vwapFillOpacity: DEFAULT_CONFIG.vwapFillOpacity,
+              ribbonLines: DEFAULT_RIBBON_LINES.map((l) => ({ ...l })),
+              ribbonFill: DEFAULT_CONFIG.ribbonFill,
+            } as IndicatorConfig,
+          };
+        }
         // merge() below tolerates a partial shape and fills the rest.
         return migrated as ChartState;
       },
@@ -766,6 +830,8 @@ export const useChartStore = create<ChartState>()(
         exchange: s.exchange,
         timeframe: s.timeframe,
         indicators: s.indicators,
+        layout: s.layout,
+        layoutIndicators: s.layoutIndicators,
         hidden: s.hidden,
         config: s.config,
         watchlist: s.watchlist,

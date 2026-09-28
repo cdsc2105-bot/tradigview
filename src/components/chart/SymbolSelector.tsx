@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { Search, ChevronDown } from "lucide-react";
+import { Search } from "lucide-react";
+import { CoinIcon, baseAsset } from "@/components/brand/CoinIcon";
 import {
   Dialog,
   DialogContent,
@@ -117,11 +118,13 @@ export function SymbolSelector() {
     <>
       <button
         onClick={() => setOpen(true)}
-        className="group flex items-center gap-2 rounded px-3 py-1.5 text-sm font-semibold hover:bg-tv-panel-hover"
+        aria-label="Buscar moneda"
+        className="group flex h-[30px] w-24 shrink-0 items-center gap-2 rounded-[7px] border border-tv-border bg-tv-surface px-2.5 text-[13px] font-semibold text-tv-text transition-colors hover:border-tv-border-strong md:w-28"
       >
-        <Search className="h-3.5 w-3.5 text-tv-text-muted group-hover:text-tv-text" />
-        <span className="tabular-nums">{symbol}</span>
-        <ChevronDown className="h-3.5 w-3.5 text-tv-text-muted" />
+        <Search className="h-3.5 w-3.5 shrink-0 text-tv-text-muted group-hover:text-tv-text" />
+        <span className="truncate">
+          {exchange === "stocks" ? stockLabel(symbol) : baseAsset(symbol)}
+        </span>
       </button>
       {/* Conditionally mounted so it fully closes (base-ui's exit animation
           lingers with this app's Tailwind setup). */}
@@ -129,7 +132,7 @@ export function SymbolSelector() {
       <Dialog open onOpenChange={setOpen}>
         <DialogContent
           showCloseButton={false}
-          className="max-w-md gap-0 bg-tv-panel p-0"
+          className="max-w-md gap-0 border border-tv-border-strong bg-tv-surface p-0"
         >
         <DialogHeader className="border-b border-tv-border px-4 py-3">
           <DialogTitle className="text-sm font-medium">Buscar símbolo</DialogTitle>
@@ -191,6 +194,7 @@ export function SymbolSelector() {
                 )}
               >
                 <div className="flex items-center gap-3">
+                  <CoinIcon symbol={s.symbol} />
                   <span className="font-semibold text-tv-text">{s.baseAsset}</span>
                   <span className="text-tv-text-muted">/ {s.quoteAsset}</span>
                 </div>
