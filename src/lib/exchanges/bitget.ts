@@ -18,6 +18,8 @@ const GRANULARITY_MAP: Record<Timeframe, string> = {
   "30m": "30m",
   "1h": "1H",
   "2h": "2H",
+  // Aggregated client-side from 1H, like 2m above.
+  "3h": "1H",
   "4h": "4Hutc",
   "6h": "6Hutc",
   "8h": "8Hutc",

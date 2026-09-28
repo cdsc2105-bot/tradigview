@@ -33,6 +33,9 @@ export type IndicatorKey =
   | "stochrsi"
   | "cipher";
 
+/** Timeframes that get a button in the header, in display order. */
+export const TIMEFRAME_BUTTONS: Timeframe[] = ["15m", "1h", "2h", "3h", "4h", "1d"];
+
 export type DrawingTool = "cursor" | "hline" | "trend" | "measure" | "eraser";
 
 export interface PriceLine {
@@ -96,13 +99,13 @@ export interface IndicatorConfig {
   rsiDivLeft: number;
   /** Bars to the right — a pivot is only confirmed this many bars later */
   rsiDivRight: number;
-  /** Moving-average line over the RSI, like CdeCripto's panel */
+  /** Moving-average line over the RSI */
   rsiMa: boolean;
   /** Period of that moving average */
   rsiMaPeriod: number;
-  /** RSI line color (white in CdeCripto's TradingView) */
+  /** RSI line color (white by default) */
   rsiColor: string;
-  /** RSI moving-average color (yellow in his chart) */
+  /** RSI moving-average color (yellow by default) */
   rsiMaColor: string;
   /** Minutes before/after the session open for the flanking session lines */
   sessionOffsetMin: number;
@@ -130,7 +133,7 @@ export interface VwapBand {
 
 export const MAX_VWAP_BANDS = 4;
 
-/** Band colors as CdeCripto draws them: 1σ green, 2σ olive, 3σ cyan. */
+/** Default band colors: 1σ green, 2σ olive, 3σ cyan. */
 export const DEFAULT_VWAP_BANDS: VwapBand[] = [
   { multiplier: 1, enabled: true, color: "#26a69a" },
   { multiplier: 2, enabled: true, color: "#b0a83b" },
@@ -163,8 +166,8 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   ema20: 20,
   ema50: 50,
   ema200: 200,
-  // 7 (not the classic 14) to match CdeCripto's RSI, which plunges deep into the
-  // oversold zone on sharp moves — the shorter period is what makes it reactive.
+  // 7 (not the classic 14): the RSI plunges deep into the oversold zone on
+  // sharp moves — the shorter period is what makes it reactive.
   rsi: 7,
   macdFast: 12,
   macdSlow: 26,
@@ -220,7 +223,7 @@ export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
   ema20: "#ffb74d",
   ema50: "#2962ff",
   ema200: "#ab47bc",
-  // Blue, like CdeCripto's RSI (was purple)
+  // Blue (was purple)
   rsi: "#2962ff",
   macd: "#2962ff",
   volume: "#787b86",
@@ -262,7 +265,7 @@ export const STOCH_COLORS = {
   band: "#2196f3",
 } as const;
 
-/** RSI pane extras, matching CdeCripto's TradingView. */
+/** RSI pane extras. */
 export const RSI_COLORS = {
   /** Purple 30–70 background zone, TV's RSI default */
   band: "#7e57c2",
@@ -271,7 +274,7 @@ export const RSI_COLORS = {
   bear: "#ef5350",
 } as const;
 
-/** Colors of the three session lines, matching CdeCripto's chart. */
+/** Colors of the three session lines. */
 export const SESSION_COLORS = {
   open: "#9c27b0", // purple — the New York open itself
   flank: "#2962ff", // blue — the −1h30 / +1h30 markers
@@ -430,14 +433,14 @@ export const useChartStore = create<ChartState>()(
         macd: false,
         volume: true,
         bb: false,
-        stoch: true,
+        stoch: false,
         supertrend: false,
         vwap: true,
         wavetrend: false,
         ribbon: true,
         ichimoku: false,
         session: true,
-        stochrsi: false,
+        stochrsi: true,
         cipher: false,
       },
       hidden: {
@@ -661,12 +664,14 @@ export const useChartStore = create<ChartState>()(
       name: "tv-gratis-chart-state",
       // Bump when we need a one-time reset of persisted fields. v1 trims the
       // watchlist down to the shorter known-coins default. v2 forces the
-      // CdeCripto-style VWAP + RSI setup over whatever was saved before.
+      // VWAP + RSI setup over whatever was saved before.
       // v3 turns on the double-stochastic bottom panes (Stoch RSI + Stoch).
-      // v4 matches Matt's real TradingView bottom: RSI + Stochastic only.
-      // v5 sets the RSI period to 7 (Matt's), so it dips deep into oversold.
+      // v4 trims the bottom to RSI + Stochastic only.
+      // v5 sets the RSI period to 7, so it dips deep into oversold.
       // v6 adds stocks & indices to the watchlist.
-      version: 6,
+      // v7 sets the default layout (VWAP, volume, MAs, RSI, Stoch RSI) and
+      // moves timeframes that no longer have a button back to 15m.
+      version: 7,
       migrate: (persisted, version) => {
         const p = (persisted ?? {}) as Partial<ChartState>;
         let migrated =
@@ -700,7 +705,6 @@ export const useChartStore = create<ChartState>()(
               ...migrated.indicators,
               stoch: true,
               stochrsi: true,
-              // Matt's TradingView bottom shows the two stochastics, not WaveTrend
               wavetrend: false,
             } as ChartState["indicators"],
             config: {
@@ -712,9 +716,7 @@ export const useChartStore = create<ChartState>()(
           };
         }
         if (version < 4) {
-          // A better look at his layout: the bottom is RSI + Stochastic, and the
-          // pane we first read as a second stochastic was the RSI with its
-          // divergence trend lines. Leave Stoch RSI available but off.
+          // Bottom panes are RSI + Stochastic; Stoch RSI stays available but off.
           migrated = {
             ...migrated,
             indicators: {
@@ -735,8 +737,25 @@ export const useChartStore = create<ChartState>()(
             ...migrated,
             config: {
               ...migrated.config,
-              rsi: DEFAULT_CONFIG.rsi, // 7 — matches Matt's deep-diving RSI
+              rsi: DEFAULT_CONFIG.rsi, // 7 — reactive, deep-diving RSI
             } as IndicatorConfig,
+          };
+        }
+        if (version < 7) {
+          const tf = migrated.timeframe;
+          migrated = {
+            ...migrated,
+            timeframe:
+              tf && TIMEFRAME_BUTTONS.includes(tf) ? tf : ("15m" as Timeframe),
+            indicators: {
+              ...migrated.indicators,
+              vwap: true,
+              volume: true,
+              ribbon: true,
+              rsi: true,
+              stochrsi: true,
+              stoch: false,
+            } as ChartState["indicators"],
           };
         }
         // merge() below tolerates a partial shape and fills the rest.

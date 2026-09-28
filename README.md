@@ -1,21 +1,23 @@
-# TradingView Gratis 📈
+# Trading 📈
 
-> **Una alternativa open-source y 100% gratis a TradingView Pro, pensada para LATAM.**
-> Velas en vivo, indicadores propios, watchlist, multi-timeframe — sin pagar USD, sin login, sin ads.
+> **Gráficos cripto en vivo, gratis y sin login.**
+> Velas en tiempo real con datos de Binance, indicadores propios y watchlist.
 
-Plataforma de charts crypto construida sobre los datos públicos de **Binance** (WebSocket) y la misma librería de render que usa TradingView ([`lightweight-charts`](https://github.com/tradingview/lightweight-charts)).
+Plataforma de charts construida sobre los datos públicos de **Binance** (REST + WebSocket) y la librería de render [`lightweight-charts`](https://github.com/tradingview/lightweight-charts).
 
 ---
 
 ## ✨ Features
 
 - 📊 **Velas en vivo** vía WebSocket de Binance (sin API key)
-- 🔍 **Búsqueda de símbolo** sobre todos los pares USDT del exchange
-- ⏱️ **Multi-timeframe**: 1m / 5m / 15m / 1h / 4h / 1d / 1w
-- 📐 **Indicadores client-side**: EMA 20/50/200, RSI 14, MACD 12/26/9, Volumen
+- 🔍 **Buscador de monedas** sobre todos los pares USDT del exchange
+- ⏱️ **Temporalidades**: 15m · 1H · 2H · 3H · 4H · 1D (3H se arma a partir de velas de 1H, Binance no la ofrece)
+- 📐 **Menú de indicadores**
+  - **Precio**: VWAP + bandas σ, Volumen, Medias móviles, Sesión Nueva York
+  - **Osciladores**: RSI (con media y divergencias), Stoch RSI, Cipher WaveTrend (tipo VuManChu Cipher B con money flow, puntos de cruce, círculos de compra/venta/oro y divergencias)
+  - **Más**: EMA, Estocástico, MACD, Bollinger, SuperTrend, Ichimoku
 - 👁️ **Watchlist** con precios y cambio 24h actualizándose en tiempo real
-- 🎨 **Visual idéntica a TradingView** (paleta, fuentes, layout)
-- 💾 **Persistencia** en localStorage (símbolo, timeframe, indicadores)
+- 💾 **Persistencia** en localStorage (símbolo, temporalidad, indicadores)
 - 🔌 **Reconexión robusta** del WebSocket con backoff exponencial
 - 🌐 100% client-side — deploy estático en Vercel/Cloudflare
 
@@ -46,14 +48,17 @@ Abrí [http://localhost:3000](http://localhost:3000).
 src/
 ├── app/
 │   ├── layout.tsx          # Root, fuente Inter, TooltipProvider, dark
+│   ├── icon.svg            # Logo de Trading (favicon)
 │   ├── page.tsx            # Dashboard armando el layout
-│   └── globals.css         # Paleta TradingView
+│   └── globals.css         # Paleta oscura
 ├── components/
+│   ├── brand/
+│   │   └── Logo.tsx           # Marca Trading
 │   ├── chart/
 │   │   ├── PriceChart.tsx     # Chart core (lightweight-charts + panes)
 │   │   ├── SymbolSelector.tsx # Búsqueda de pares USDT
 │   │   ├── TimeframeSelector.tsx
-│   │   └── IndicatorMenu.tsx  # Toggle EMA/RSI/MACD/Volume
+│   │   └── IndicatorMenu.tsx  # Precio / Osciladores / Más indicadores
 │   ├── layout/
 │   │   ├── Header.tsx
 │   │   ├── LeftSidebar.tsx    # Iconos drawing tools (visual)
@@ -113,7 +118,7 @@ Para 1000 velas y panes múltiples el costo es despreciable.
 
 ## 📺 Serie de videos
 
-Este repo es la base de la serie **"TradingView Gratis"**:
+Este repo es la base de la serie **"Trading"**:
 
 1. ✅ **Video 1 — Base**: lo que ves acá
 2. 🔜 **Video 2 — Alertas**: Supabase + Telegram bot

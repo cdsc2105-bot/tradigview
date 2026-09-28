@@ -8,6 +8,8 @@ export type Timeframe =
   | "30m"
   | "1h"
   | "2h"
+  /** Not offered by Binance — built client-side from three 1h candles */
+  | "3h"
   | "4h"
   | "6h"
   | "8h"

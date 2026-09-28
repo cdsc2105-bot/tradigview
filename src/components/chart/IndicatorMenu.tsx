@@ -26,139 +26,139 @@ interface Entry {
   keywords: string;
 }
 
-const GROUP_ORDER = [
-  "Medias móviles",
-  "Osciladores",
-  "Bandas",
-  "Tendencia",
-  "Volumen",
-  "Sesiones",
-];
+const GROUP_ORDER = ["Precio", "Osciladores", "Más indicadores"];
 
 const ENTRIES: Entry[] = [
+  // ——— Precio: lo que se dibuja sobre las velas ———
+  {
+    key: "vwap",
+    group: "Precio",
+    label: (c) => {
+      const mults = c.vwapBandLines
+        .filter((b) => b.enabled && b.multiplier > 0)
+        .map((b) => b.multiplier)
+        .sort((a, b) => a - b);
+      return mults.length > 0
+        ? `VWAP + Bandas σ (±${mults.join("/")})`
+        : "VWAP + Bandas σ";
+    },
+    desc: "Precio medio por volumen con bandas de desviación sombreadas.",
+    keywords: "vwap volumen desviacion bandas sigma cloud precio medio anclado",
+  },
+  {
+    key: "volume",
+    group: "Precio",
+    label: () => "Volumen",
+    desc: "Barras de volumen por vela, resaltando el volumen relativo alto.",
+    keywords: "volumen volume barras",
+  },
   {
     key: "ribbon",
-    group: "Medias móviles",
+    group: "Precio",
     label: (c) =>
-      `Cinta EMAs (${c.ribbonLines
+      `Medias móviles (${c.ribbonLines
         .filter((l) => l.enabled)
         .map((l) => l.period)
         .join("/")})`,
     desc: "Varias EMAs juntas con relleno. Agregas/quitas líneas y colores.",
-    keywords: "media movil moving average ribbon cinta ema exponencial tendencia",
+    keywords: "media movil medias moviles moving average ribbon cinta ema exponencial tendencia ma",
   },
   {
+    key: "session",
+    group: "Precio",
+    label: (c) => `Sesión Nueva York (apertura ±${c.sessionOffsetMin}m)`,
+    desc: "Líneas verticales en la apertura de Nueva York y ±1h30.",
+    keywords: "sesion sesiones session apertura open nueva york new york killzone horario mercado",
+  },
+
+  // ——— Osciladores: paneles debajo del gráfico ———
+  {
+    key: "rsi",
+    group: "Osciladores",
+    label: (c) => `RSI (${c.rsi})`,
+    desc: "Fuerza relativa con media, zonas y divergencias.",
+    keywords: "rsi fuerza relativa oscilador momentum sobrecompra sobreventa",
+  },
+  {
+    key: "stochrsi",
+    group: "Osciladores",
+    label: (c) =>
+      `Stoch RSI (${c.srsiRsiLen}, ${c.srsiStochLen}, ${c.srsiK}, ${c.srsiD})`,
+    desc: "Estocástico sobre el RSI: líneas K y D con zona 20–80.",
+    keywords: "estocastico rsi stoch stochastic srsi rapido oscilador sobrecompra sobreventa",
+  },
+  {
+    key: "cipher",
+    group: "Osciladores",
+    label: () => "Cipher WaveTrend (tipo VuManChu Cipher B)",
+    desc: "WaveTrend con money flow, puntos de cruce, círculos de compra/venta/oro y divergencias.",
+    keywords: "cipher b vumanchu market cipher wavetrend wt mfi money flow flujo dinero vwap circulos puntos cruce oro compra venta divergencias",
+  },
+
+  // ——— Más indicadores ———
+  {
     key: "ema20",
-    group: "Medias móviles",
+    group: "Más indicadores",
     label: (c) => `EMA ${c.ema20}`,
     desc: "Media móvil exponencial rápida.",
     keywords: "media movil moving average ema exponencial rapida",
   },
   {
     key: "ema50",
-    group: "Medias móviles",
+    group: "Más indicadores",
     label: (c) => `EMA ${c.ema50}`,
     desc: "Media móvil exponencial intermedia.",
     keywords: "media movil moving average ema exponencial",
   },
   {
     key: "ema200",
-    group: "Medias móviles",
+    group: "Más indicadores",
     label: (c) => `EMA ${c.ema200}`,
     desc: "Media móvil de fondo, la gran tendencia.",
     keywords: "media movil moving average ema exponencial lenta tendencia",
   },
   {
-    key: "rsi",
-    group: "Osciladores",
-    label: (c) => `RSI (${c.rsi})`,
-    desc: "Fuerza relativa. Sobrecompra/sobreventa.",
-    keywords: "rsi fuerza relativa oscilador momentum sobrecompra sobreventa",
+    key: "stoch",
+    group: "Más indicadores",
+    label: (c) => `Estocástico (${c.stochK}, ${c.stochD}, ${c.stochSmooth})`,
+    desc: "Estocástico clásico sobre el precio. Giros de momentum.",
+    keywords: "stochastic estocastico oscilador momentum",
+  },
+  {
+    key: "wavetrend",
+    group: "Más indicadores",
+    label: (c) => `WaveTrend simple (${c.wtChannel}, ${c.wtAvg}, ${c.wtSignal})`,
+    desc: "Solo las dos líneas del WaveTrend, sin money flow ni señales.",
+    keywords: "wavetrend cipher wt oscilador momentum ondas",
   },
   {
     key: "macd",
-    group: "Osciladores",
+    group: "Más indicadores",
     label: (c) => `MACD (${c.macdFast}, ${c.macdSlow}, ${c.macdSignal})`,
     desc: "Convergencia/divergencia de medias.",
     keywords: "macd oscilador momentum convergencia divergencia",
   },
   {
-    key: "stoch",
-    group: "Osciladores",
-    label: (c) => `Stochastic (${c.stochK}, ${c.stochD}, ${c.stochSmooth})`,
-    desc: "Estocástico. Giros de momentum.",
-    keywords: "stochastic estocastico oscilador momentum",
-  },
-  {
-    key: "wavetrend",
-    group: "Osciladores",
-    label: (c) => `WaveTrend (${c.wtChannel}, ${c.wtAvg}, ${c.wtSignal})`,
-    desc: "El oscilador tipo Cipher (dos líneas azul/naranja).",
-    keywords: "wavetrend cipher wt oscilador momentum ondas",
-  },
-  {
-    key: "cipher",
-    group: "Osciladores",
-    label: () => "VuManChu Cipher B",
-    desc: "Cipher B completo: WaveTrend, VWAP, MFI, círculos de compra/venta/oro y divergencias.",
-    keywords: "cipher b vumanchu market cipher wavetrend mfi vwap circulos oro compra venta divergencias",
-  },
-  {
     key: "bb",
-    group: "Bandas",
+    group: "Más indicadores",
     label: (c) => `Bollinger (${c.bbPeriod}, ${c.bbStdDev})`,
     desc: "Bandas de Bollinger. Volatilidad.",
     keywords: "bollinger bandas volatilidad desviacion",
   },
   {
     key: "supertrend",
-    group: "Tendencia",
+    group: "Más indicadores",
     label: (c) => `SuperTrend (${c.stPeriod}, ${c.stMultiplier})`,
     desc: "Seguidor de tendencia por ATR.",
     keywords: "supertrend tendencia atr seguidor stop",
   },
   {
     key: "ichimoku",
-    group: "Tendencia",
+    group: "Más indicadores",
     label: (c) =>
       `Ichimoku (${c.ichiTenkan}, ${c.ichiKijun}, ${c.ichiSenkouB})`,
     desc: "Nube de Ichimoku: tendencia, soporte/resistencia y momentum.",
     keywords: "ichimoku nube kumo cloud tenkan kijun senkou chikou tendencia japones",
-  },
-  {
-    key: "vwap",
-    group: "Volumen",
-    label: (c) => {
-      const mults = c.vwapBandLines
-        .filter((b) => b.enabled && b.multiplier > 0)
-        .map((b) => b.multiplier)
-        .sort((a, b) => a - b);
-      return mults.length > 0 ? `VWAP ±${mults.join("/")}σ` : "VWAP";
-    },
-    desc: "Precio medio por volumen + bandas de desviación (cloud).",
-    keywords: "vwap volumen desviacion bandas cloud precio medio anclado",
-  },
-  {
-    key: "volume",
-    group: "Volumen",
-    label: () => "Volumen",
-    desc: "Barras de volumen por vela.",
-    keywords: "volumen volume barras",
-  },
-  {
-    key: "stochrsi",
-    group: "Osciladores",
-    label: (c) =>
-      `Estocástico RSI (${c.srsiRsiLen}, ${c.srsiStochLen}, ${c.srsiK}, ${c.srsiD})`,
-    desc: "Estocástico sobre el RSI. El pane rápido del combo de CdeCripto.",
-    keywords: "estocastico rsi stoch stochastic srsi rapido oscilador sobrecompra sobreventa",
-  },
-  {
-    key: "session",
-    group: "Sesiones",
-    label: (c) => `Sesión NY (OPEN ±${c.sessionOffsetMin}m)`,
-    desc: "Líneas verticales en la apertura de Nueva York y ±1h30.",
-    keywords: "sesion session apertura open nueva york new york killzone horario",
   },
 ];
 
@@ -239,7 +239,7 @@ export function IndicatorMenu() {
               <Search className="h-3.5 w-3.5 shrink-0 text-tv-text-muted" />
               <Input
                 autoFocus
-                placeholder="Buscar: EMA, RSI, VWAP, Cipher…"
+                placeholder="Buscar: VWAP, RSI, Stoch RSI, Cipher…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 className="h-8 select-text border-0 bg-transparent px-0 focus-visible:ring-0"
@@ -247,7 +247,7 @@ export function IndicatorMenu() {
             </div>
           </div>
 
-          <ScrollArea className="min-h-0 flex-1">
+          <ScrollArea className="min-h-0 flex-1 overflow-hidden">
             <div className="flex flex-col py-1">
               {groups.length === 0 && (
                 <div className="p-6 text-center text-xs text-tv-text-muted">
@@ -315,7 +315,7 @@ export function IndicatorMenu() {
             </div>
           </ScrollArea>
 
-          <div className="select-none border-t border-tv-border px-3 py-2 text-[11px] text-tv-text-muted">
+          <div className="shrink-0 select-none border-t border-tv-border bg-tv-panel px-3 py-2 text-[11px] text-tv-text-muted">
             Toca un indicador para activarlo o quitarlo · “Ajustes” para
             configurarlo
           </div>

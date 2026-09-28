@@ -24,7 +24,11 @@ import { fetchFuturesKlines } from "@/lib/exchanges/binance-futures";
 import { getBitgetWS } from "@/lib/exchanges/bitget-ws";
 import { fetchStockKlines, stockLabel } from "@/lib/exchanges/stocks";
 import { getBinanceWS, getBinanceFuturesWS } from "@/lib/binance/ws";
-import { aggregate2m, makeTwoMinuteAggregator } from "@/lib/aggregate";
+import {
+  SYNTHETIC_TIMEFRAMES,
+  aggregateCandles,
+  makeBucketAggregator,
+} from "@/lib/aggregate";
 import {
   ema,
   rsi,
@@ -164,8 +168,9 @@ const KLINE_FETCHERS: Record<
 };
 
 /**
- * Fetch candles, synthesizing the 2m interval (which no venue offers) from
- * twice as many 1m candles.
+ * Fetch candles, synthesizing the intervals no venue offers (2m, 3h) from the
+ * smaller base interval. `onBase` receives those raw base candles so the live
+ * aggregator can seed the bucket that is still forming.
  */
 async function fetchCandles(
   exchange: Exchange,
@@ -173,12 +178,15 @@ async function fetchCandles(
   timeframe: Timeframe,
   limit: number,
   endTime?: number,
+  onBase?: (base: Candle[]) => void,
 ): Promise<Candle[]> {
-  if (timeframe !== "2m") {
+  const synth = SYNTHETIC_TIMEFRAMES[timeframe];
+  if (!synth) {
     return KLINE_FETCHERS[exchange](symbol, timeframe, limit, endTime);
   }
-  const oneMin = await KLINE_FETCHERS[exchange](symbol, "1m", limit, endTime);
-  return aggregate2m(oneMin);
+  const base = await KLINE_FETCHERS[exchange](symbol, synth.base, limit, endTime);
+  onBase?.(base);
+  return aggregateCandles(base, synth.bucketSeconds);
 }
 
 /** Candles fetched per request, and how far back we let the buffer grow. */
@@ -207,6 +215,7 @@ const TF_SECONDS: Record<string, number> = {
   "30m": 1800,
   "1h": 3600,
   "2h": 7200,
+  "3h": 10800,
   "4h": 14400,
   "6h": 21600,
   "8h": 28800,
@@ -492,8 +501,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         borderColor: TV_COLORS.border,
         textColor: TV_COLORS.textMuted,
       },
-      // Show times in the viewer's local timezone (like TradingView and Matt's
-      // UTC+2 chart) instead of the library's UTC default, so the same candle
+      // Show times in the viewer's local timezone (like most
+      // charting platforms) instead of the library's UTC default, so the same candle
       // lines up under the same clock label.
       localization: {
         timeFormatter: (t: number) => {
@@ -853,7 +862,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         },
         paneIndex,
       );
-      // MA over the RSI (yellow), like CdeCripto's panel
+      // Yellow moving average over the RSI
       const rMa = chartRef.current.addSeries(
         LineSeries,
         {
@@ -1131,7 +1140,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         lineWidth: 2,
         priceLineVisible: false,
         // The price label on the right axis is what makes each level readable
-        // at a glance, the way CdeCripto shows them.
+        // at a glance.
         lastValueVisible: true,
       });
     } else if (!indicators.vwap && vwapRef.current) {
@@ -2102,7 +2111,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   }
 
   /**
-   * RSI background like Matt's pane: red zone above 70, purple 30–70, green
+   * RSI background: red zone above 70, purple 30–70, green
    * below 30 — plus a stronger fill between the RSI line and the band edge
    * while it's overbought/oversold, so the extremes pop.
    */
@@ -2137,7 +2146,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       bottom: Math.min(p.value, 30),
     }));
 
-    // Zones exactly as Matt's pane: red only at the 85–100 extreme, purple
+    // Zones: red only at the 85–100 extreme, purple
     // through the 30–70 middle, green only at the 0–15 extreme.
     fill.setRegions(
       [
@@ -2152,7 +2161,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   }
 
   /**
-   * Red/green divergence lines from pivot to pivot on the RSI, like Matt's pane.
+   * Red/green divergence lines from pivot to pivot on the RSI.
    * Clean look — no arrows or text labels, just the connecting lines.
    */
   function updateRSIDivergences(
@@ -2409,7 +2418,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     setLastValues((prev) => ({ ...prev, vwapVal: last?.vwap }));
   }
 
-  /** Round dot on the last bar of a line, like the ones CdeCripto puts on each level. */
+  /** Round dot on the last bar of a line, marking each level's current value. */
   function setEndDot(
     series: ISeriesApi<"Line"> | null | undefined,
     time: number,
@@ -2784,6 +2793,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     let lastTick = Date.now();
     let resyncing = false;
 
+    // Synthetic timeframes (2m, 3h): the latest raw base candles, so the live
+    // aggregator can rebuild the forming bucket exactly from its parts.
+    const synth = SYNTHETIC_TIMEFRAMES[timeframe];
+    let baseTail: Candle[] = [];
+    const keepBaseTail = (base: Candle[]) => {
+      baseTail = base.slice(-12);
+    };
+
     /**
      * Refetch recent candles and splice them over the loaded tail.
      * `deep` pulls a big window (wake-from-sleep / initial-failure recovery);
@@ -2793,7 +2810,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       if (cancelled || resyncing || fetchingOlder) return;
       resyncing = true;
       try {
-        const fresh = await fetchCandles(exchange, symbol, timeframe, deep ? 500 : 90);
+        const fresh = await fetchCandles(
+          exchange,
+          symbol,
+          timeframe,
+          deep ? 500 : 90,
+          undefined,
+          keepBaseTail,
+        );
         if (cancelled || fresh.length === 0) return;
 
         const hadData = candlesRef.current.length > 0;
@@ -2841,7 +2865,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     async function load(attempt = 0) {
       try {
-        const klines = await fetchCandles(exchange, symbol, timeframe, PAGE_SIZE);
+        const klines = await fetchCandles(
+          exchange,
+          symbol,
+          timeframe,
+          PAGE_SIZE,
+          undefined,
+          keepBaseTail,
+        );
         if (cancelled) return;
         candlesRef.current = klines;
         redrawAll();
@@ -2932,19 +2963,23 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             });
         };
 
-        // 2m doesn't exist upstream: subscribe to the 1m stream and roll pairs
-        // of minutes into the evolving 2m candle before the normal handling.
-        const onCandle =
-          timeframe === "2m"
-            ? makeTwoMinuteAggregator(handleCandle, (bucket) => {
-                const last = candlesRef.current[candlesRef.current.length - 1];
-                return last && last.time === bucket ? { ...last } : undefined;
-              })
-            : handleCandle;
+        // 2m and 3h don't exist upstream: subscribe to the base stream (1m / 1h)
+        // and roll its candles into the evolving bucket before the normal handling.
+        const onCandle = synth
+          ? makeBucketAggregator(
+              synth.bucketSeconds,
+              synth.baseSeconds,
+              handleCandle,
+              (bucket) =>
+                baseTail.filter(
+                  (c) => c.time >= bucket && c.time < bucket + synth.bucketSeconds,
+                ),
+            )
+          : handleCandle;
 
         unsub = ws.subscribeKline({
           symbol,
-          interval: timeframe === "2m" ? "1m" : timeframe,
+          interval: synth ? synth.base : timeframe,
           onCandle,
         });
       } catch (e) {
@@ -3220,7 +3255,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           )}
           {indicators.ribbon && (
             <IndicatorPill
-              name={`Cinta EMAs ${config.ribbonLines
+              name={`Medias móviles ${config.ribbonLines
                 .filter((l) => l.enabled)
                 .map((l) => l.period)
                 .join("/")}`}
@@ -3442,7 +3477,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           className="pointer-events-none absolute z-10"
         >
           <IndicatorPill
-            name="VMC Cipher B"
+            name="Cipher WaveTrend"
             value={
               lastValues.cipherWt1 !== undefined
                 ? `WT1 ${lastValues.cipherWt1.toFixed(2)} · WT2 ${(lastValues.cipherWt2 ?? 0).toFixed(2)} · VWAP ${(lastValues.cipherVwap ?? 0).toFixed(2)} · RSI ${(lastValues.cipherRsi ?? 0).toFixed(2)} · MFI ${(lastValues.cipherMfi ?? 0).toFixed(2)}`

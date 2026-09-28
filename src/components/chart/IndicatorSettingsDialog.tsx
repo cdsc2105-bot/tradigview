@@ -27,15 +27,15 @@ const TITLES: Record<IndicatorKey, string> = {
   macd: "MACD",
   volume: "Volumen",
   bb: "Bollinger Bands",
-  stoch: "Stochastic",
+  stoch: "Estocástico",
   supertrend: "SuperTrend",
-  vwap: "VWAP",
+  vwap: "VWAP + Bandas σ",
   wavetrend: "WaveTrend",
-  ribbon: "Cinta de EMAs",
+  ribbon: "Medias móviles",
   ichimoku: "Ichimoku",
   session: "Sesión de Nueva York",
-  stochrsi: "Estocástico RSI",
-  cipher: "VuManChu Cipher B",
+  stochrsi: "Stoch RSI",
+  cipher: "Cipher WaveTrend",
 };
 
 export function IndicatorSettingsDialog() {
@@ -266,8 +266,7 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
 
           <p className="text-xs text-tv-text-muted">
             Un pivote solo se confirma cuando pasan los bares de la derecha, así
-            que la etiqueta aparece unas velas por detrás — igual que en
-            TradingView. Divergencia regular = posible giro; oculta = probable
+            que la etiqueta aparece unas velas por detrás. Divergencia regular = posible giro; oculta = probable
             continuación.
           </p>
         </>
@@ -363,8 +362,7 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
             />
           </div>
           <p className="text-xs text-tv-text-muted">
-            El estocástico aplicado sobre el RSI (14, 14, 3, 3 como en
-            TradingView). Más rápido y extremo que el estocástico normal: bueno
+            El estocástico aplicado sobre el RSI (14, 14, 3, 3 por defecto). Más rápido y extremo que el estocástico normal: bueno
             para cronometrar entradas dentro de la tendencia.
           </p>
         </>

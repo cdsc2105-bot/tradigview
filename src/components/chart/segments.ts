@@ -35,8 +35,8 @@ interface SegmentPx {
 
 /**
  * Draws line segments on whatever pane the host series lives in — used for the
- * red/green divergence trend lines over the RSI, the way CdeCripto's chart
- * connects one pivot to the next.
+ * red/green divergence trend lines over the RSI, connecting one pivot to the
+ * next.
  */
 export class SegmentsPrimitive implements ISeriesPrimitive<Time> {
   private _segments: Segment[] = [];

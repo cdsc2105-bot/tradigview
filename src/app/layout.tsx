@@ -16,9 +16,10 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TradingView — Gráficos cripto en vivo",
+  title: "Trading — Gráficos cripto en vivo",
   description:
-    "Plataforma de charts crypto en vivo. Binance spot y perpetuos, Bitget perpetuos + lightweight-charts.",
+    "Gráfico de velas en vivo con datos de Binance, VWAP con bandas, RSI, Stoch RSI, medias móviles y Cipher WaveTrend.",
+  applicationName: "Trading",
 };
 
 // Lock the viewport to device width and prevent double-tap zoom so the chart

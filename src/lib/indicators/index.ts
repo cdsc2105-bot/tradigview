@@ -313,7 +313,7 @@ export function smoothSMA(
 /**
  * Stochastic RSI — the stochastic oscillator applied to the RSI series instead
  * of price, as TradingView's built-in (defaults 14, 14, 3, 3). Faster and more
- * extreme than the plain stochastic; the second pane of the CdeCripto layout.
+ * extreme than the plain stochastic.
  */
 export function stochRsi(
   candles: Candle[],
