@@ -620,13 +620,13 @@ export interface CipherPoint {
 }
 
 export type CipherSignalKind =
-  | "buy" // big green circle — WT cross up while oversold
-  | "sell" // big red circle — WT cross down while overbought
+  | "buy" // green circle on the bottom row — WT cross up while oversold
+  | "sell" // red circle on the top row — WT cross down while overbought
   | "gold" // gold buy — strong bullish setup
-  | "crossUp" // small green dot at a WT cross up
-  | "crossDown" // small red dot at a WT cross down
-  | "bullDiv" // WT bullish divergence dot
-  | "bearDiv"; // WT bearish divergence dot
+  | "crossUp" // small green dot on the wave at every WT cross up
+  | "crossDown" // small red dot on the wave at every WT cross down
+  | "bullDiv" // bullish WT divergence (bottom row circle + line on the wave)
+  | "bearDiv"; // bearish WT divergence (top row circle + line on the wave)
 
 export interface CipherSignal {
   time: number;
@@ -652,7 +652,7 @@ export interface CipherOptions {
   divOS: number; // -65 WT bullish div min
   divOBadd: number; // 15  2nd bearish div
   divOSadd: number; // -40 2nd bullish div
-  rsiLen: number; // 14 (for the gold-buy RSI check)
+  rsiLen: number; // 6 — the RSI line in the pane and the gold-buy check
 }
 
 export const CIPHER_DEFAULTS: CipherOptions = {
@@ -669,7 +669,7 @@ export const CIPHER_DEFAULTS: CipherOptions = {
   divOS: -65,
   divOBadd: 15,
   divOSadd: -40,
-  rsiLen: 14,
+  rsiLen: 6,
 };
 
 export interface CipherResult {
@@ -714,6 +714,54 @@ function smaArray(src: number[], period: number): number[] {
     if (i >= period - 1 && count === period) out[i] = sum / period;
   }
   return out;
+}
+
+/** A regular divergence: pivot bar and the previous pivot it is measured against. */
+interface WtDivergence {
+  pivot: number;
+  prev: number;
+}
+
+/**
+ * Regular divergences of an oscillator (wt2, or the RSI), keyed by the bar
+ * that confirms them (the fractal needs two bars after its pivot). Bearish:
+ * price makes a higher high while the oscillator makes a lower high above
+ * `topLimit`; bullish mirrors it below `botLimit`.
+ */
+function findWtDivergences(
+  candles: Candle[],
+  wt2: ArrayLike<number>,
+  topLimit: number,
+  botLimit: number,
+): {
+  bear: Map<number, WtDivergence>;
+  bull: Map<number, WtDivergence>;
+  /** Every qualifying bottom fractal (divergence or not) with the one before it */
+  bottomAt: Map<number, WtDivergence>;
+} {
+  const bear = new Map<number, WtDivergence>();
+  const bull = new Map<number, WtDivergence>();
+  const bottomAt = new Map<number, WtDivergence>();
+  let prevTop = -1;
+  let prevBot = -1;
+  for (let i = 4; i < wt2.length; i++) {
+    const [a, b, c, d, e] = [wt2[i - 4], wt2[i - 3], wt2[i - 2], wt2[i - 1], wt2[i]];
+    if ([a, b, c, d, e].some((x) => isNaN(x))) continue;
+    const p = i - 2;
+    if (a < c && b < c && c > d && c > e && c >= topLimit) {
+      if (prevTop >= 0 && candles[p].high > candles[prevTop].high && c < wt2[prevTop]) {
+        bear.set(i, { pivot: p, prev: prevTop });
+      }
+      prevTop = p;
+    } else if (a > c && b > c && c < d && c < e && c <= botLimit) {
+      if (prevBot >= 0 && candles[p].low < candles[prevBot].low && c > wt2[prevBot]) {
+        bull.set(i, { pivot: p, prev: prevBot });
+      }
+      bottomAt.set(i, { pivot: p, prev: prevBot });
+      prevBot = p;
+    }
+  }
+  return { bear, bull, bottomAt };
 }
 
 /**
@@ -787,125 +835,63 @@ export function cipherB(
   // --- Signals: crosses, buy/sell, gold, divergences ---
   const signals: CipherSignal[] = [];
 
-  // Fractal divergences on wt2 (regular only, matching the enabled settings).
-  // A top/bottom fractal sits 2 bars back: needs src[i-4..i].
-  const isTopFractal = (i: number) =>
-    i >= 4 &&
-    !isNaN(wt2[i - 4]) &&
-    wt2[i - 4] < wt2[i - 2] &&
-    wt2[i - 3] < wt2[i - 2] &&
-    wt2[i - 2] > wt2[i - 1] &&
-    wt2[i - 2] > wt2[i];
-  const isBotFractal = (i: number) =>
-    i >= 4 &&
-    !isNaN(wt2[i - 4]) &&
-    wt2[i - 4] > wt2[i - 2] &&
-    wt2[i - 3] > wt2[i - 2] &&
-    wt2[i - 2] < wt2[i - 1] &&
-    wt2[i - 2] < wt2[i];
+  // WT divergences, as the script's f_findDivs: a fractal only counts when its
+  // pivot clears the level, and it is compared with the previous fractal that
+  // also cleared it. The script runs this twice — the main levels (45 / −65)
+  // and the "add" levels (15 / −40) — and shows both.
+  const main = findWtDivergences(candles, wt2, opts.divOB, opts.divOS);
+  const add = findWtDivergences(candles, wt2, opts.divOBadd, opts.divOSadd);
+  const rsiArr = candles.map((c) => rsiByTime.get(c.time) ?? NaN);
+  const rsiAt = (i: number) => (isNaN(rsiArr[i]) ? 50 : rsiArr[i]);
+  // RSI divergences (60 / 30) only feed the gold buy, as in the script.
+  const rsiDivs = findWtDivergences(candles, rsiArr, 60, 30);
 
-  let prevTopOsc: number | null = null;
-  let prevTopHigh: number | null = null;
-  let prevTopTime: number | null = null;
-  let prevBotOsc: number | null = null;
-  let prevBotLow: number | null = null;
-  let prevBotTime: number | null = null;
-  let prevBotWt: number | null = null; // wtLow_prev for gold buy
+  const pushDiv = (kind: "bullDiv" | "bearDiv", d: WtDivergence) => {
+    const time = candles[d.pivot].time;
+    if (signals.some((s) => s.kind === kind && s.time === time)) return;
+    signals.push({
+      time,
+      kind,
+      value: wt2[d.pivot],
+      prevTime: candles[d.prev].time,
+      prevValue: wt2[d.prev],
+    });
+  };
 
-  for (let i = 0; i < n; i++) {
-    if (isNaN(wt1[i]) || isNaN(wt2[i]) || i < 1 || isNaN(wt1[i - 1]) || isNaN(wt2[i - 1]))
-      continue;
+  for (let i = 1; i < n; i++) {
+    if (isNaN(wt1[i]) || isNaN(wt2[i]) || isNaN(wt1[i - 1]) || isNaN(wt2[i - 1])) continue;
 
-    // Cross of wt1 and wt2 on this bar
+    // Divergences confirm 2 bars after their pivot
+    for (const d of [main.bear.get(i), add.bear.get(i)]) if (d) pushDiv("bearDiv", d);
+    for (const d of [main.bull.get(i), add.bull.get(i)]) if (d) pushDiv("bullDiv", d);
+
+    // Gold buy: a bullish divergence (WT main level, or RSI) climbing out of a
+    // deep low — the previous WT bottom was ≤ −75 with the RSI under 30 there.
+    const bottom = main.bottomAt.get(i);
+    if (
+      bottom &&
+      bottom.prev >= 0 &&
+      (main.bull.has(i) || rsiDivs.bull.has(i)) &&
+      wt2[bottom.prev] <= opts.osLevel3 &&
+      wt2[i] > opts.osLevel3 &&
+      wt2[bottom.prev] - wt2[i] <= -5 &&
+      rsiAt(bottom.prev) < 30
+    ) {
+      signals.push({ time: candles[i - 2].time, kind: "gold", value: wt2[i] });
+    }
+
+    // Every wt1/wt2 cross gets a small dot on the wave; the ones in the
+    // extremes also fire the big buy/sell circle on its own row.
     const crossed =
       (wt1[i - 1] - wt2[i - 1]) * (wt1[i] - wt2[i]) < 0 ||
       (wt1[i] === wt2[i] && wt1[i - 1] !== wt2[i - 1]);
+    if (!crossed) continue;
     const crossUp = wt2[i] - wt1[i] <= 0; // wt1 above wt2
-    const oversold = wt2[i] <= opts.osLevel;
-    const overbought = wt2[i] >= opts.obLevel;
-
-    // Divergence detection at the confirmed fractal (2 bars back)
-    let bullDiv = false;
-    let bearDiv = false;
-    let bearFrom: { t: number; v: number } | null = null;
-    let bullFrom: { t: number; v: number } | null = null;
-    if (isTopFractal(i)) {
-      const osc = wt2[i - 2];
-      const hi = candles[i - 2].high;
-      if (
-        prevTopHigh !== null &&
-        prevTopOsc !== null &&
-        prevTopTime !== null &&
-        osc >= opts.divOB &&
-        hi > prevTopHigh &&
-        osc < prevTopOsc
-      ) {
-        bearDiv = true;
-        bearFrom = { t: prevTopTime, v: prevTopOsc };
-      }
-      prevTopOsc = osc;
-      prevTopHigh = hi;
-      prevTopTime = candles[i - 2].time;
-    }
-    if (isBotFractal(i)) {
-      const osc = wt2[i - 2];
-      const lo = candles[i - 2].low;
-      if (
-        prevBotLow !== null &&
-        prevBotOsc !== null &&
-        prevBotTime !== null &&
-        osc <= opts.divOS &&
-        lo < prevBotLow &&
-        osc > prevBotOsc
-      ) {
-        bullDiv = true;
-        bullFrom = { t: prevBotTime, v: prevBotOsc };
-      }
-      // Gold buy uses the previous bottom fractal's osc value + its rsi
-      const goldOk =
-        prevBotWt !== null &&
-        prevBotWt <= opts.osLevel3 &&
-        wt2[i] > opts.osLevel3 &&
-        prevBotWt - wt2[i] <= -5 &&
-        (rsiByTime.get(candles[i - 2].time) ?? 100) < 30;
-      if (bullDiv && goldOk) {
-        signals.push({ time: candles[i].time, kind: "gold", value: wt2[i] });
-      }
-      prevBotOsc = osc;
-      prevBotLow = lo;
-      prevBotTime = candles[i - 2].time;
-      prevBotWt = osc;
-    }
-
-    if (bullDiv)
-      signals.push({
-        time: candles[i - 2].time,
-        kind: "bullDiv",
-        value: wt2[i - 2],
-        prevTime: bullFrom?.t,
-        prevValue: bullFrom?.v,
-      });
-    if (bearDiv)
-      signals.push({
-        time: candles[i - 2].time,
-        kind: "bearDiv",
-        value: wt2[i - 2],
-        prevTime: bearFrom?.t,
-        prevValue: bearFrom?.v,
-      });
-
-    if (crossed) {
-      if (crossUp && oversold) {
-        signals.push({ time: candles[i].time, kind: "buy", value: wt2[i] });
-      } else if (!crossUp && overbought) {
-        signals.push({ time: candles[i].time, kind: "sell", value: wt2[i] });
-      } else {
-        signals.push({
-          time: candles[i].time,
-          kind: crossUp ? "crossUp" : "crossDown",
-          value: wt2[i],
-        });
-      }
+    signals.push({ time: candles[i].time, kind: crossUp ? "crossUp" : "crossDown", value: wt2[i] });
+    if (crossUp && wt2[i] <= opts.osLevel) {
+      signals.push({ time: candles[i].time, kind: "buy", value: wt2[i] });
+    } else if (!crossUp && wt2[i] >= opts.obLevel) {
+      signals.push({ time: candles[i].time, kind: "sell", value: wt2[i] });
     }
   }
 

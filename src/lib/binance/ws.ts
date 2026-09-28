@@ -1,8 +1,12 @@
 import type { Candle, Timeframe } from "./types";
 
-const WS_SPOT = "wss://stream.binance.com:9443/stream";
+/**
+ * Spot streams, main host first. data-stream.binance.vision is Binance's
+ * market-data-only mirror, reachable where stream.binance.com is blocked.
+ */
+const WS_SPOT = ["wss://stream.binance.com:9443/stream", "wss://data-stream.binance.vision/stream"];
 /** Binance USDT-M futures use a separate host with the same stream protocol. */
-const WS_FUTURES = "wss://fstream.binance.com/stream";
+const WS_FUTURES = ["wss://fstream.binance.com/stream"];
 
 interface KlineMsg {
   stream: string;
@@ -85,14 +89,18 @@ export class BinanceWS {
   private tradeSubs = new Map<string, (t: Trade) => void>();
   private connected = false;
   private closing = false;
+  /** Which of `urls` to use; moves on when a host can't even be reached */
+  private urlIndex = 0;
 
-  constructor(private readonly url: string = WS_SPOT) {}
+  constructor(private readonly urls: string[] = WS_SPOT) {}
 
   connect() {
     if (this.ws || this.closing) return;
-    this.ws = new WebSocket(this.url);
+    this.ws = new WebSocket(this.urls[this.urlIndex]);
+    let opened = false;
 
     this.ws.onopen = () => {
+      opened = true;
       this.connected = true;
       this.reconnectAttempts = 0;
       // Re-subscribe everything
@@ -117,7 +125,16 @@ export class BinanceWS {
     this.ws.onclose = () => {
       this.connected = false;
       this.ws = null;
-      if (!this.closing) this.scheduleReconnect();
+      if (this.closing) return;
+      if (!opened && this.urls.length > 1) {
+        // Never got through — this host is blocked here; try the next one now.
+        this.urlIndex = (this.urlIndex + 1) % this.urls.length;
+        if (this.urlIndex !== 0) {
+          this.connect();
+          return;
+        }
+      }
+      this.scheduleReconnect();
     };
 
     this.ws.onerror = () => {

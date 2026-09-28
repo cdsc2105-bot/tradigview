@@ -1,7 +1,15 @@
 import type { Candle, SymbolInfo, Ticker24h, Timeframe } from "./types";
 import { decimalsFromTickSize, registerPrecision } from "@/lib/precision";
+import { fetchJsonFrom, HttpError } from "@/lib/net";
 
-const BASE = "https://api.binance.com/api/v3";
+/**
+ * Binance spot public market data. `data-api.binance.vision` is Binance's own
+ * market-data-only mirror: it keeps working on networks and in regions where
+ * api.binance.com is blocked, so it is the automatic fallback.
+ */
+const BASES = ["https://api.binance.com/api/v3", "https://data-api.binance.vision/api/v3"];
+const spot = <T>(path: string, init?: { timeoutMs?: number; cache?: RequestCache }) =>
+  fetchJsonFrom<T>("binance-spot", BASES, path, init);
 
 /**
  * @param endTime  Unix ms. When set, returns the `limit` candles that closed
@@ -19,10 +27,7 @@ export async function fetchKlines(
     limit: String(limit),
   });
   if (endTime !== undefined) params.set("endTime", String(Math.floor(endTime)));
-  const url = `${BASE}/klines?${params}`;
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`klines ${res.status}`);
-  const data = (await res.json()) as unknown[][];
+  const data = await spot<unknown[][]>(`/klines?${params}`);
   return data.map((k) => ({
     time: Math.floor((k[0] as number) / 1000),
     open: parseFloat(k[1] as string),
@@ -35,10 +40,7 @@ export async function fetchKlines(
 }
 
 export async function fetchTicker24h(symbol: string): Promise<Ticker24h> {
-  const url = `${BASE}/ticker/24hr?symbol=${symbol.toUpperCase()}`;
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`ticker ${res.status}`);
-  const t = await res.json();
+  const t = await spot<Record<string, string>>(`/ticker/24hr?symbol=${symbol.toUpperCase()}`);
   return {
     symbol: t.symbol,
     lastPrice: parseFloat(t.lastPrice),
@@ -53,11 +55,10 @@ export async function fetchTicker24h(symbol: string): Promise<Ticker24h> {
 
 export async function fetchTickers24h(symbols: string[]): Promise<Ticker24h[]> {
   const arr = JSON.stringify(symbols.map((s) => s.toUpperCase()));
-  const url = `${BASE}/ticker/24hr?symbols=${encodeURIComponent(arr)}`;
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`tickers ${res.status}`);
-  const data = await res.json();
-  return data.map((t: Record<string, string>) => ({
+  const data = await spot<Record<string, string>[]>(
+    `/ticker/24hr?symbols=${encodeURIComponent(arr)}`,
+  );
+  return data.map((t) => ({
     symbol: t.symbol,
     lastPrice: parseFloat(t.lastPrice),
     priceChange: parseFloat(t.priceChange),
@@ -80,10 +81,20 @@ interface RawSymbol {
 let cachedSymbols: SymbolInfo[] | null = null;
 export async function fetchExchangeSymbols(): Promise<SymbolInfo[]> {
   if (cachedSymbols) return cachedSymbols;
-  const res = await fetch(`${BASE}/exchangeInfo`, { cache: "force-cache" });
-  if (!res.ok) throw new Error(`exchangeInfo ${res.status}`);
-  const data = await res.json();
-  const live = (data.symbols as RawSymbol[]).filter(
+  // The full exchangeInfo is many MB, almost all of it permission sets. Ask
+  // for the trading pairs without them (a fraction of the size); fall back to
+  // the plain call if a host doesn't know the parameters.
+  const opts = { timeoutMs: 20_000, cache: "force-cache" as RequestCache };
+  const data = await spot<{ symbols: RawSymbol[] }>(
+    "/exchangeInfo?symbolStatus=TRADING&showPermissionSets=false",
+    opts,
+  ).catch((e) => {
+    if (e instanceof HttpError && e.status === 400) {
+      return spot<{ symbols: RawSymbol[] }>("/exchangeInfo", opts);
+    }
+    throw e;
+  });
+  const live = data.symbols.filter(
     (s) => s.status === "TRADING" && s.quoteAsset === "USDT",
   );
 

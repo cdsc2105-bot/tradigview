@@ -107,6 +107,9 @@ export function Watchlist() {
     null,
   );
   const [collapsed, setCollapsed] = useState(false);
+  /** Venue whose symbol list failed to load, and a bump to retry it */
+  const [failedFor, setFailedFor] = useState<Exchange | null>(null);
+  const [retry, setRetry] = useState(0);
 
   // Only the active market's list is loaded — one venue, not four, on startup.
   useEffect(() => {
@@ -115,11 +118,14 @@ export function Watchlist() {
       .then((set) => {
         if (!cancelled) setSupported({ exchange, set });
       })
-      .catch(console.error);
+      .catch((e) => {
+        console.error(e);
+        if (!cancelled) setFailedFor(exchange);
+      });
     return () => {
       cancelled = true;
     };
-  }, [exchange]);
+  }, [exchange, retry]);
 
   const set = supported?.exchange === exchange ? supported.set : null;
   const symbols = useMemo(
@@ -171,7 +177,22 @@ export function Watchlist() {
             </span>
           </button>
 
-          {!collapsed && !set && (
+          {!collapsed && !set && failedFor === exchange && (
+            <div className="flex items-center justify-between gap-2 px-2.5 py-2 text-xs text-tv-yellow">
+              <span>No se pudo cargar este mercado.</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setFailedFor(null);
+                  setRetry((r) => r + 1);
+                }}
+                className="rounded border border-tv-border px-2 py-0.5 text-tv-text hover:bg-tv-panel-hover"
+              >
+                Reintentar
+              </button>
+            </div>
+          )}
+          {!collapsed && !set && failedFor !== exchange && (
             <div className="px-2.5 py-2 text-xs text-tv-text-dim">Cargando…</div>
           )}
           {!collapsed && set && symbols.length === 0 && (

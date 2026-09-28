@@ -301,7 +301,9 @@ export const CIPHER_COLORS = {
   gold: "#e2a400", // gold buy
   bullDiv: "#00e676",
   bearDiv: "#e60000",
-  rsi: "#c33ee1", // RSI line inside the Cipher pane — magenta
+  rsi: "#c33ee1", // RSI line inside the Cipher pane — magenta between 30 and 60
+  rsiHigh: "#e13e3e", // … red at or above 60
+  rsiLow: "#3ee145", // … green at or below 30
 } as const;
 
 /** TradingView oscillator styling shared by both stochastic panes. */

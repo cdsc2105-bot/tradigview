@@ -1,5 +1,6 @@
 import type { Candle, Ticker24h, Timeframe } from "@/lib/binance/types";
 import { decimalsFromTickSize, registerPrecision } from "@/lib/precision";
+import { fetchJsonFrom } from "@/lib/net";
 
 /**
  * Binance USDT-M perpetual futures (fapi). Same response shapes as spot, so the
@@ -7,6 +8,8 @@ import { decimalsFromTickSize, registerPrecision } from "@/lib/precision";
  * quirks differ (e.g. the 24h ticker endpoint has no `symbols` batch param).
  */
 const FAPI = "https://fapi.binance.com/fapi/v1";
+const fapi = <T>(path: string, init?: { timeoutMs?: number; cache?: RequestCache }) =>
+  fetchJsonFrom<T>("binance-futures", [FAPI], path, init);
 
 /**
  * @param endTime  Unix ms. When set, returns the `limit` candles that closed
@@ -24,9 +27,7 @@ export async function fetchFuturesKlines(
     limit: String(limit),
   });
   if (endTime !== undefined) params.set("endTime", String(Math.floor(endTime)));
-  const res = await fetch(`${FAPI}/klines?${params}`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`futures klines ${res.status}`);
-  const data = (await res.json()) as unknown[][];
+  const data = await fapi<unknown[][]>(`/klines?${params}`);
   return data.map((k) => ({
     time: Math.floor((k[0] as number) / 1000),
     open: parseFloat(k[1] as string),
@@ -45,9 +46,7 @@ export async function fetchFuturesKlines(
 export async function fetchFuturesTickers(
   symbols: string[],
 ): Promise<Ticker24h[]> {
-  const res = await fetch(`${FAPI}/ticker/24hr`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`futures tickers ${res.status}`);
-  const data = (await res.json()) as Record<string, string>[];
+  const data = await fapi<Record<string, string>[]>("/ticker/24hr");
   const requested = new Set(symbols.map((s) => s.toUpperCase()));
   return data
     .filter((t) => requested.has(t.symbol))
@@ -65,9 +64,10 @@ export async function fetchFuturesTickers(
 
 /** Every live USDT-margined perpetual on Binance Futures. */
 export async function fetchFuturesSymbols(): Promise<string[]> {
-  const res = await fetch(`${FAPI}/exchangeInfo`, { cache: "force-cache" });
-  if (!res.ok) throw new Error(`futures exchangeInfo ${res.status}`);
-  const data = await res.json();
+  const data = await fapi<{ symbols: unknown[] }>("/exchangeInfo", {
+    timeoutMs: 20_000,
+    cache: "force-cache",
+  });
   const live = (data.symbols as {
     symbol: string;
     status: string;

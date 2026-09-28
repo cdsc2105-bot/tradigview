@@ -42,6 +42,9 @@ export function SymbolSelector() {
   const [symbolsByExchange, setSymbolsByExchange] = useState<
     Partial<Record<Exchange, string[]>>
   >({});
+  /** Venues whose full list failed to load (shown with a retry) */
+  const [failed, setFailed] = useState<Partial<Record<Exchange, boolean>>>({});
+  const [retry, setRetry] = useState(0);
 
   // When the dialog opens, sync the tab to the current exchange.
   useEffect(() => {
@@ -51,21 +54,28 @@ export function SymbolSelector() {
   // Load the symbol list for the active tab (each venue lists different pairs —
   // HYPEUSDT / Hyperliquid is Bitget-only, for instance).
   useEffect(() => {
-    if (!open) return;
+    if (!open || symbolsByExchange[tab]) return;
     let cancelled = false;
     fetchSupportedSymbols(tab)
       .then((set) => {
-        if (!cancelled)
-          setSymbolsByExchange((prev) => ({ ...prev, [tab]: [...set].sort() }));
+        if (cancelled) return;
+        setSymbolsByExchange((prev) => ({ ...prev, [tab]: [...set].sort() }));
+        setFailed((prev) => ({ ...prev, [tab]: false }));
       })
-      .catch(console.error);
+      .catch((e) => {
+        console.error(e);
+        if (!cancelled) setFailed((prev) => ({ ...prev, [tab]: true }));
+      });
     return () => {
       cancelled = true;
     };
-  }, [open, tab]);
+  }, [open, tab, retry, symbolsByExchange]);
 
+  const loaded = symbolsByExchange[tab];
   const filtered = useMemo(() => {
-    const list = symbolsByExchange[tab] ?? [];
+    // Until the venue's full list arrives, offer the well-known coins so the
+    // dialog is usable instantly; the list is filtered for real once loaded.
+    const list = symbolsByExchange[tab] ?? (tab === "stocks" ? [] : POPULAR_SYMBOLS);
     const q = query.trim().toUpperCase();
 
     let result: string[];
@@ -174,14 +184,34 @@ export function SymbolSelector() {
 
         <ScrollArea className="h-[380px]">
           <div className="flex flex-col">
+            {failed[tab] && !loaded && (
+              <div className="flex items-center justify-between gap-3 border-b border-tv-border px-4 py-2 text-[11px] text-tv-yellow">
+                <span>No se pudo cargar la lista completa de este mercado.</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFailed((prev) => ({ ...prev, [tab]: false }));
+                    setRetry((r) => r + 1);
+                  }}
+                  className="shrink-0 rounded border border-tv-border px-2 py-0.5 text-tv-text hover:bg-tv-panel-hover"
+                >
+                  Reintentar
+                </button>
+              </div>
+            )}
             {!query.trim() && filtered.length > 0 && (
               <div className="select-none px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
                 Populares · escribe para buscar más
+                {!loaded && !failed[tab] && tab !== "stocks" && (
+                  <span className="ml-1 normal-case tracking-normal text-tv-text-dim">
+                    (cargando lista completa…)
+                  </span>
+                )}
               </div>
             )}
             {filtered.length === 0 && (
               <div className="p-4 text-center text-xs text-tv-text-muted">
-                {symbolsByExchange[tab] ? "Sin resultados" : "Cargando…"}
+                {loaded || failed[tab] ? "Sin resultados" : "Cargando…"}
               </div>
             )}
             {filtered.map((s) => (
@@ -196,7 +226,9 @@ export function SymbolSelector() {
                 <div className="flex items-center gap-3">
                   <CoinIcon symbol={s.symbol} />
                   <span className="font-semibold text-tv-text">{s.baseAsset}</span>
-                  <span className="text-tv-text-muted">/ {s.quoteAsset}</span>
+                  {s.quoteAsset && (
+                    <span className="text-tv-text-muted">/ {s.quoteAsset}</span>
+                  )}
                 </div>
                 <span className="text-[10px] text-tv-text-dim">
                   {TABS.find((t) => t.key === tab)?.label}

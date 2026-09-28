@@ -301,11 +301,6 @@ interface LastValues {
   vwapVal?: number;
   wt1?: number;
   wt2?: number;
-  cipherWt1?: number;
-  cipherWt2?: number;
-  cipherVwap?: number;
-  cipherRsi?: number;
-  cipherMfi?: number;
   /** Last value of each EMA ribbon line, fast → slow */
   ribbon?: (number | undefined)[];
   /** Ichimoku cloud bias from the last Senkou A vs B */
@@ -375,6 +370,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const cipherObRef = useRef<ISeriesApi<"Line"> | null>(null);
   const cipherOsRef = useRef<ISeriesApi<"Line"> | null>(null);
   const cipher0Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  /** Faint dotted guide at +100 */
+  const cipherTopRef = useRef<ISeriesApi<"Line"> | null>(null);
+  /** Money-flow bar: a strip at −95…−99 colored green/red by the MFI sign */
+  const cipherMfiBarRef = useRef<ISeriesApi<"Line"> | null>(null);
   const cipherRsiRef = useRef<ISeriesApi<"Line"> | null>(null);
   /** Dot rows: buy/sell/gold/divergence, plus the small dots on the WT wave */
   const cipherDotRefs = useRef<Record<string, ISeriesApi<"Line"> | null>>({});
@@ -415,6 +414,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const maximizedPane = useChartStore((s) => s.maximizedPane);
   const toggleMaximizedPane = useChartStore((s) => s.toggleMaximizedPane);
   const reloadNonce = useChartStore((s) => s.reloadNonce);
+  const reload = useChartStore((s) => s.reload);
 
   // Refs to avoid recreating subscribeClick on every tool change
   const toolRef = useRef(tool);
@@ -466,6 +466,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const [lastPrice, setLastPrice] = useState<{ value: number; pct: number } | null>(null);
   /** The forming candle, shown in the OHLC row whenever the cursor is off the chart */
   const [lastBar, setLastBar] = useState<HoverInfo | null>(null);
+  /** Data couldn't be loaded after a couple of tries — show a retry banner */
+  const [loadError, setLoadError] = useState(false);
   /** Seconds left before the forming candle closes (null off intraday) */
   const [countdown, setCountdown] = useState<number | null>(null);
   const [lastValues, setLastValues] = useState<LastValues>({});
@@ -1325,21 +1327,22 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           paneIndex,
         );
 
-      // Draw order: WT2 (purple, widest) under WT1 (blue), then fast-wave + MFI.
+      // Draw order: WT2 (navy) under WT1 (blue), then the fast-wave VWAP and
+      // the money-flow area on top. Opacities match the reference render.
       cipherWt2Ref.current = baseline(
-        hexToRgba(CIPHER_COLORS.wt2, 55),
-        hexToRgba(CIPHER_COLORS.wt2, 55),
+        hexToRgba(CIPHER_COLORS.wt2, 75),
+        hexToRgba(CIPHER_COLORS.wt2, 75),
         hexToRgba(CIPHER_COLORS.wt2, 0),
       );
       cipherWt1Ref.current = baseline(
-        hexToRgba(CIPHER_COLORS.wt1, 45),
-        hexToRgba(CIPHER_COLORS.wt1, 45),
+        hexToRgba(CIPHER_COLORS.wt1, 75),
+        hexToRgba(CIPHER_COLORS.wt1, 75),
         hexToRgba(CIPHER_COLORS.wt1, 0),
       );
       cipherVwapRef.current = baseline(
-        hexToRgba(CIPHER_COLORS.vwap, 30),
-        hexToRgba(CIPHER_COLORS.vwap, 30),
-        hexToRgba(CIPHER_COLORS.vwap, 55),
+        hexToRgba(CIPHER_COLORS.vwap, 50),
+        hexToRgba(CIPHER_COLORS.vwap, 50),
+        hexToRgba(CIPHER_COLORS.vwap, 0),
       );
       cipherMfiRef.current = baseline(
         hexToRgba(CIPHER_COLORS.mfiUp, 50),
@@ -1359,18 +1362,32 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           },
           paneIndex,
         );
-      cipher0Ref.current = guide(0, hexToRgba("#ffffff", 25));
-      cipherObRef.current = guide(CIPHER_DEFAULTS.obLevel, hexToRgba("#ffffff", 15));
-      cipherOsRef.current = guide(CIPHER_DEFAULTS.osLevel, hexToRgba("#ffffff", 15));
+      cipher0Ref.current = guide(0, hexToRgba("#ffffff", 55), 0);
+      cipherObRef.current = guide(CIPHER_LEVELS.ob2, hexToRgba("#ffffff", 45), 0);
+      cipherOsRef.current = guide(CIPHER_LEVELS.os2, hexToRgba("#ffffff", 45), 0);
+      cipherTopRef.current = guide(CIPHER_LEVELS.ob3, hexToRgba("#ffffff", 18), 1);
 
-      // RSI drawn right in the Cipher pane (the magenta line)
+      // Money-flow bar along the bottom (per-point colors on a thick line)
+      cipherMfiBarRef.current = chart.addSeries(
+        LineSeries,
+        {
+          lineWidth: 4,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        },
+        paneIndex,
+      );
+
+      // RSI drawn right in the Cipher pane: purple, red ≥ 60, green ≤ 30
       cipherRsiRef.current = chart.addSeries(
         LineSeries,
         {
           color: CIPHER_COLORS.rsi,
-          lineWidth: 2,
+          lineWidth: 1,
           priceLineVisible: false,
           lastValueVisible: false,
+          crosshairMarkerVisible: false,
         },
         paneIndex,
       );
@@ -1390,14 +1407,16 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           },
           paneIndex,
         );
+      // Sizes and colors as the reference draws them: small cross dots on the
+      // wave, bigger buy/sell circles on the rows, divergence rows bigger still.
       cipherDotRefs.current = {
+        crossUp: dots(CIPHER_COLORS.buy, 2.8),
+        crossDown: dots(CIPHER_COLORS.sell, 2.8),
         buy: dots(CIPHER_COLORS.buyDot, 4),
         sell: dots(CIPHER_COLORS.sellDot, 4),
-        gold: dots(CIPHER_COLORS.gold, 5),
-        bullDiv: dots(CIPHER_COLORS.bullDiv, 3),
-        bearDiv: dots(CIPHER_COLORS.bearDiv, 3),
-        crossUp: dots(CIPHER_COLORS.buy, 2.5),
-        crossDown: dots(CIPHER_COLORS.sell, 2.5),
+        bullDiv: dots(CIPHER_COLORS.buyDot, 5),
+        bearDiv: dots(CIPHER_COLORS.sellDot, 5),
+        gold: dots(CIPHER_COLORS.gold, 6),
       };
 
       cipherDivSegRef.current = new SegmentsPrimitive();
@@ -1417,6 +1436,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         cipherObRef,
         cipherOsRef,
         cipher0Ref,
+        cipherTopRef,
+        cipherMfiBarRef,
         cipherRsiRef,
       ].forEach((r) => {
         if (r.current) chart.removeSeries(r.current);
@@ -1495,6 +1516,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         cipherObRef,
         cipherOsRef,
         cipher0Ref,
+        cipherTopRef,
+        cipherMfiBarRef,
         cipherRsiRef,
       ].forEach((r) => r.current?.applyOptions({ visible: vis }));
       Object.values(cipherDotRefs.current).forEach((s) =>
@@ -2569,6 +2592,17 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
    * absolute positions — buys along the bottom, sells along the top. Cross dots
    * ride the wave itself (null = use the bar's own wt2).
    */
+  /** Guide levels and rows of the Cipher pane. */
+  const CIPHER_LEVELS = {
+    ob2: 60,
+    os2: -60,
+    ob3: 100,
+    /** Middle of the −95…−99 money-flow strip */
+    mfiBar: -97,
+    rsiOverbought: 60,
+    rsiOversold: 30,
+  } as const;
+
   const CIPHER_ROW: Record<CipherSignalKind, number | null> = {
     buy: -107,
     sell: 105,
@@ -2592,22 +2626,38 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     cipherWt1Ref.current?.setData(at((p) => p.wt1));
     cipherVwapRef.current?.setData(at((p) => p.vwap));
     cipherMfiRef.current?.setData(at((p) => p.rsiMfi));
-    cipherRsiRef.current?.setData(at((p) => p.rsi));
+    cipherRsiRef.current?.setData(
+      points.map((p) => ({
+        time: p.time as UTCTimestamp,
+        value: p.rsi,
+        color: hexToRgba(
+          p.rsi >= CIPHER_LEVELS.rsiOverbought
+            ? CIPHER_COLORS.rsiHigh
+            : p.rsi <= CIPHER_LEVELS.rsiOversold
+              ? CIPHER_COLORS.rsiLow
+              : CIPHER_COLORS.rsi,
+          75,
+        ),
+      })),
+    );
 
     const first = points[0].time as UTCTimestamp;
     const lastT = points[points.length - 1].time as UTCTimestamp;
-    cipher0Ref.current?.setData([
-      { time: first, value: 0 },
-      { time: lastT, value: 0 },
-    ]);
-    cipherObRef.current?.setData([
-      { time: first, value: CIPHER_DEFAULTS.obLevel },
-      { time: lastT, value: CIPHER_DEFAULTS.obLevel },
-    ]);
-    cipherOsRef.current?.setData([
-      { time: first, value: CIPHER_DEFAULTS.osLevel },
-      { time: lastT, value: CIPHER_DEFAULTS.osLevel },
-    ]);
+    const flat = (value: number) => [
+      { time: first, value },
+      { time: lastT, value },
+    ];
+    cipher0Ref.current?.setData(flat(0));
+    cipherObRef.current?.setData(flat(CIPHER_LEVELS.ob2));
+    cipherOsRef.current?.setData(flat(CIPHER_LEVELS.os2));
+    cipherTopRef.current?.setData(flat(CIPHER_LEVELS.ob3));
+    cipherMfiBarRef.current?.setData(
+      points.map((p) => ({
+        time: p.time as UTCTimestamp,
+        value: CIPHER_LEVELS.mfiBar,
+        color: hexToRgba(p.rsiMfi > 0 ? CIPHER_COLORS.mfiUp : CIPHER_COLORS.mfiDown, 25),
+      })),
+    );
 
     // Each signal kind gets its own dot series, so they can overlap freely and
     // sit at their own fixed height.
@@ -2639,16 +2689,6 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         color: s.kind === "bullDiv" ? CIPHER_COLORS.bullDiv : CIPHER_COLORS.bearDiv,
       }));
     cipherDivSegRef.current?.setSegments(segs, segs.length > 0);
-
-    const last = points[points.length - 1];
-    setLastValues((prev) => ({
-      ...prev,
-      cipherWt1: last.wt1,
-      cipherWt2: last.wt2,
-      cipherVwap: last.vwap,
-      cipherRsi: last.rsi,
-      cipherMfi: last.rsiMfi,
-    }));
   }
 
   /**
@@ -2846,6 +2886,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         }
 
         candleCache.set(cacheKey, candlesRef.current.slice(-PAGE_SIZE));
+        setLoadError(false);
         lastTick = Date.now();
       } catch (e) {
         console.error("Resync failed:", e);
@@ -2947,6 +2988,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           keepBaseTail,
         );
         if (cancelled) return;
+        setLoadError(false);
         candlesRef.current = klines;
         candleCache.set(cacheKey, klines.slice());
         redrawAll();
@@ -3018,6 +3060,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         };
       } catch (e) {
         console.error("Failed to load chart data:", e);
+        if (!cancelled && attempt >= 1) setLoadError(true);
         // Retry with backoff — a flaky connection must not leave a dead chart.
         // After the retries run out, the watchdog keeps trying via resync().
         if (!cancelled && attempt < 4) {
@@ -3034,6 +3077,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       cancelled = true;
       loadMoreRef.current = null;
       setLoadingHistory(false);
+      setLoadError(false);
       clearInterval(watchdog);
       document.removeEventListener("visibilitychange", onWake);
       window.removeEventListener("online", onWake);
@@ -3172,6 +3216,31 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
       {measureRender}
+
+      {/* Covers whatever the chart still shows from the previous market, so
+          stale candles are never read as this one's */}
+      {loadError && (
+        <div
+          role="alert"
+          className="absolute inset-0 z-30 flex items-center justify-center bg-tv-chart/90 p-4"
+        >
+          <div className="flex max-w-sm flex-col items-center gap-3 rounded-xl border border-tv-border-strong bg-tv-surface px-5 py-4 text-center text-[13px] text-tv-text shadow-xl">
+            <span>
+              No se pudieron cargar los datos de{" "}
+              <b>{MARKET_SOURCES.find((m) => m.key === exchange)?.label ?? "este mercado"}</b>.
+              {exchange === "binancef" &&
+                " Binance Futuros puede no estar disponible en tu país o red; prueba Binance · Spot o Bitget."}
+            </span>
+            <button
+              type="button"
+              onClick={reload}
+              className="rounded-md bg-tv-accent px-4 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+            >
+              Reintentar
+            </button>
+          </div>
+        </div>
+      )}
 
       {loadingHistory && (
         <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded border border-tv-border bg-tv-panel/90 px-2 py-1 text-[11px] text-tv-text-muted shadow">
@@ -3503,11 +3572,6 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         >
           <IndicatorPill
             name="Cipher WaveTrend"
-            value={
-              lastValues.cipherWt1 !== undefined
-                ? `WT1 ${lastValues.cipherWt1.toFixed(2)} · WT2 ${(lastValues.cipherWt2 ?? 0).toFixed(2)} · VWAP ${(lastValues.cipherVwap ?? 0).toFixed(2)} · RSI ${(lastValues.cipherRsi ?? 0).toFixed(2)} · MFI ${(lastValues.cipherMfi ?? 0).toFixed(2)}`
-                : undefined
-            }
             color={CIPHER_COLORS.wt1}
             hidden={hidden.cipher}
             onToggleHide={() => toggleHidden("cipher")}

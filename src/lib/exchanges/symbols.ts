@@ -12,24 +12,32 @@ import type { Exchange } from "@/lib/store/chart-store";
  * request with a 400 if any symbol in it is unknown. So every place that
  * fetches by symbol must filter against these sets first.
  */
-const cache: Partial<Record<Exchange, Set<string>>> = {};
+const cache: Partial<Record<Exchange, Promise<Set<string>>>> = {};
 
-export async function fetchSupportedSymbols(
-  exchange: Exchange,
-): Promise<Set<string>> {
+/**
+ * One request per venue, shared by every caller (search dialog, watchlist,
+ * market switch). A failure is not cached, so the next call retries.
+ */
+export function fetchSupportedSymbols(exchange: Exchange): Promise<Set<string>> {
   const cached = cache[exchange];
   if (cached) return cached;
 
-  const symbols =
-    exchange === "binance"
-      ? (await fetchExchangeSymbols()).map((s) => s.symbol)
-      : exchange === "binancef"
-        ? await fetchFuturesSymbols()
-        : exchange === "stocks"
-          ? STOCK_SYMBOLS
-          : await fetchBitgetSymbols();
+  const load = async () => {
+    const symbols =
+      exchange === "binance"
+        ? (await fetchExchangeSymbols()).map((s) => s.symbol)
+        : exchange === "binancef"
+          ? await fetchFuturesSymbols()
+          : exchange === "stocks"
+            ? STOCK_SYMBOLS
+            : await fetchBitgetSymbols();
+    return new Set(symbols.map((s) => s.toUpperCase()));
+  };
 
-  const set = new Set(symbols.map((s) => s.toUpperCase()));
-  cache[exchange] = set;
-  return set;
+  const pending = load().catch((e) => {
+    delete cache[exchange];
+    throw e;
+  });
+  cache[exchange] = pending;
+  return pending;
 }
