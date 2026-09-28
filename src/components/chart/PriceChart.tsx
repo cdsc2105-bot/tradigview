@@ -13,6 +13,8 @@ import {
   type ISeriesApi,
   type IPriceLine,
   type LineWidth,
+  type Logical,
+  type MouseEventParams,
   type UTCTimestamp,
 } from "lightweight-charts";
 import { fetchKlines } from "@/lib/binance/rest";
@@ -51,11 +53,14 @@ import {
   RSI_COLORS,
   SESSION_COLORS,
   STOCH_COLORS,
+  SHAPE_TOOLS,
   useChartStore,
+  type DrawingTool,
   type Exchange,
   type IndicatorConfig,
   type IndicatorKey,
   type RibbonLine,
+  type ShapeKind,
   type VwapBand,
 } from "@/lib/store/chart-store";
 import {
@@ -70,6 +75,7 @@ import {
   sessionLines,
 } from "@/components/chart/sessionLines";
 import { SegmentsPrimitive, type Segment } from "@/components/chart/segments";
+import { ShapesPrimitive, fibPrice, textBoxWidth, type ShapeView } from "@/components/chart/shapes";
 import { formatVolume } from "@/lib/format";
 import { formatPriceFor, precisionFor } from "@/lib/precision";
 import { cn } from "@/lib/utils";
@@ -91,8 +97,11 @@ const INITIAL_MEASURE: MeasureState = { phase: "idle", a: null, b: null };
 
 /** What the pointer is on top of when interacting with user drawings. */
 type DrawingHit =
-  | { kind: "trend"; id: string; part: "p1" | "p2" | "body" }
+  | { kind: "shape"; id: string; part: "p1" | "p2" | "body" }
   | { kind: "hline"; id: string };
+
+const isShapeTool = (t: DrawingTool): t is ShapeKind =>
+  (SHAPE_TOOLS as readonly string[]).includes(t);
 
 /** Pixel distance from a point to the segment (x1,y1)–(x2,y2). */
 function distToSegment(
@@ -443,6 +452,24 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   priceLinesRef.current = priceLines;
   const symbolRef = useRef(symbol);
   symbolRef.current = symbol;
+  const exchangeRef = useRef(exchange);
+  exchangeRef.current = exchange;
+  const magnet = useChartStore((s) => s.magnet);
+  const magnetRef = useRef(magnet);
+  magnetRef.current = magnet;
+  const drawingsLocked = useChartStore((s) => s.drawingsLocked);
+  const drawingsLockedRef = useRef(drawingsLocked);
+  drawingsLockedRef.current = drawingsLocked;
+  const drawingsHidden = useChartStore((s) => s.drawingsHidden);
+  const drawingsHiddenRef = useRef(drawingsHidden);
+  drawingsHiddenRef.current = drawingsHidden;
+  const checkpointDrawings = useChartStore((s) => s.checkpointDrawings);
+  const checkpointRef = useRef(checkpointDrawings);
+  checkpointRef.current = checkpointDrawings;
+  const undoDrawing = useChartStore((s) => s.undoDrawing);
+  const redoDrawing = useChartStore((s) => s.redoDrawing);
+  const undoRef = useRef({ undo: undoDrawing, redo: redoDrawing });
+  undoRef.current = { undo: undoDrawing, redo: redoDrawing };
   const configRef = useRef(config);
   configRef.current = config;
   const ribbonVisibleRef = useRef(false);
@@ -468,6 +495,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const [lastBar, setLastBar] = useState<HoverInfo | null>(null);
   /** Data couldn't be loaded after a couple of tries — show a retry banner */
   const [loadError, setLoadError] = useState(false);
+  /** Waiting for the first data of this symbol/timeframe/market */
+  const [loading, setLoading] = useState(false);
   /** Seconds left before the forming candle closes (null off intraday) */
   const [countdown, setCountdown] = useState<number | null>(null);
   const [lastValues, setLastValues] = useState<LastValues>({});
@@ -478,10 +507,17 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   measureRef.current = measure;
   /** Trend line being placed (first click done, second pending) */
   const [trendDraft, setTrendDraft] = useState<MeasureState>(INITIAL_MEASURE);
+  /** Text note being typed: where it goes on screen and in chart space */
+  const [textDraft, setTextDraft] = useState<{
+    x: number;
+    y: number;
+    time: number;
+    price: number;
+  } | null>(null);
   const trendDraftRef = useRef(trendDraft);
   trendDraftRef.current = trendDraft;
   /** User-drawn trend lines, painted on the candles pane */
-  const trendSegRef = useRef<SegmentsPrimitive | null>(null);
+  const shapesRef = useRef<ShapesPrimitive | null>(null);
 
   // Helper — compute pane top offsets from chart layout
   function recomputePaneOffsets() {
@@ -542,6 +578,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         borderColor: TV_COLORS.border,
         timeVisible: true,
         secondsVisible: false,
+        // Never scroll into blank space before the first bar
+        fixLeftEdge: true,
         rightOffset: 12,
         barSpacing: 8,
         tickMarkFormatter: (t: number, tickType: number) => {
@@ -598,43 +636,21 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     candleSeriesRef.current.attachPrimitive(ichiCloudRef.current);
     sessionRef.current = new SessionLinesPrimitive();
     candleSeriesRef.current.attachPrimitive(sessionRef.current);
-    trendSegRef.current = new SegmentsPrimitive();
-    candleSeriesRef.current.attachPrimitive(trendSegRef.current);
+    shapesRef.current = new ShapesPrimitive(project, (p) =>
+      formatPriceFor(exchangeRef.current, symbolRef.current, p),
+    );
+    candleSeriesRef.current.attachPrimitive(shapesRef.current);
 
     chartRef.current = chart;
 
-    // Click handler — add horizontal price line when hline tool is active
-    chart.subscribeClick((param) => {
+    // Click handler — horizontal lines and the ruler (shapes: see below)
+    const onChartClick = (param: MouseEventParams) => {
       if (!param.point || !candleSeriesRef.current) return;
       const price = candleSeriesRef.current.coordinateToPrice(param.point.y);
       if (price === null || !isFinite(price)) return;
 
       if (toolRef.current === "hline") {
         addPriceLineRef.current(price, symbolRef.current);
-        return;
-      }
-
-      if (toolRef.current === "trend") {
-        if (!param.time) return;
-        const time = Number(param.time);
-        const current = trendDraftRef.current;
-        if (current.phase === "idle") {
-          setTrendDraft({
-            phase: "placing",
-            a: { time, price },
-            b: { time, price },
-          });
-        } else if (current.phase === "placing" && current.a) {
-          addTrendLineRef.current({
-            symbol: symbolRef.current,
-            t1: current.a.time,
-            p1: current.a.price,
-            t2: time,
-            p2: price,
-          });
-          setTrendDraft(INITIAL_MEASURE);
-          setToolRef.current("cursor"); // back to navigation, like TradingView
-        }
         return;
       }
 
@@ -662,7 +678,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           });
         }
       }
-    });
+    };
+    chart.subscribeClick(onChartClick);
 
     // Crosshair handler
     chart.subscribeCrosshairMove((param) => {
@@ -682,21 +699,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         }
       }
 
-      // Trend line preview follows the crosshair between the two clicks
+      // Shape preview follows the crosshair between the two clicks
       if (
-        toolRef.current === "trend" &&
+        isShapeTool(toolRef.current) &&
         trendDraftRef.current.phase === "placing" &&
-        param.point &&
-        param.time &&
-        candleSeriesRef.current
+        param.point
       ) {
-        const price = candleSeriesRef.current.coordinateToPrice(param.point.y);
-        if (price !== null && isFinite(price)) {
-          const time = Number(param.time);
-          setTrendDraft((prev) =>
-            prev.phase === "placing" ? { ...prev, b: { time, price } } : prev,
-          );
-        }
+        const pt = pointAt(param.point.x, param.point.y);
+        if (pt) setTrendDraft((prev) => (prev.phase === "placing" ? { ...prev, b: pt } : prev));
       }
 
       if (!param.time || !candleSeriesRef.current) {
@@ -789,7 +799,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       vwapBandRefs.current = [];
       vwapFillRef.current = null;
       sessionRef.current = null;
-      trendSegRef.current = null;
+      shapesRef.current = null;
       wt1Ref.current = null;
       wt2Ref.current = null;
       wt0Ref.current = null;
@@ -1629,7 +1639,9 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     const series = candleSeriesRef.current;
     if (!series) return;
     const map = priceLinesMapRef.current;
-    const linesForThisSymbol = priceLines.filter((p) => p.symbol === symbol);
+    const linesForThisSymbol = drawingsHidden
+      ? []
+      : priceLines.filter((p) => p.symbol === symbol);
     const activeIds = new Set(linesForThisSymbol.map((p) => p.id));
 
     for (const [id, apiLine] of map.entries()) {
@@ -1656,19 +1668,92 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         map.set(pl.id, apiLine);
       }
     }
-  }, [priceLines, symbol]);
+  }, [priceLines, symbol, drawingsHidden]);
 
   // Cursor style when drawing tools are active + reset drafts on tool change
   useEffect(() => {
     if (containerRef.current) {
       containerRef.current.style.cursor =
-        tool === "hline" || tool === "measure" || tool === "trend"
-          ? "crosshair"
-          : "";
+        tool === "hline" || tool === "measure" || isShapeTool(tool) ? "crosshair" : "";
     }
     if (tool !== "measure") setMeasure(INITIAL_MEASURE);
-    if (tool !== "trend") setTrendDraft(INITIAL_MEASURE);
+    // A new tool always starts a fresh drawing
+    setTrendDraft(INITIAL_MEASURE);
+    setTextDraft(null);
   }, [tool]);
+
+  /** Seconds between the last two bars — the step used past either end. */
+  function barStep(): number {
+    const c = candlesRef.current;
+    return c.length > 1 ? c[c.length - 1].time - c[c.length - 2].time : 60;
+  }
+
+  /**
+   * Fractional bar index of a timestamp. Drawings store real times, so they
+   * stay put across timeframes and can sit past the last bar.
+   */
+  function timeToLogical(t: number): number | null {
+    const c = candlesRef.current;
+    const n = c.length;
+    if (n === 0) return null;
+    const step = barStep();
+    if (t <= c[0].time) return (t - c[0].time) / step;
+    if (t >= c[n - 1].time) return n - 1 + (t - c[n - 1].time) / step;
+    let lo = 0;
+    let hi = n - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (c[mid].time <= t) lo = mid;
+      else hi = mid;
+    }
+    return lo + (t - c[lo].time) / (c[hi].time - c[lo].time);
+  }
+
+  /** Timestamp of the bar at a (rounded) logical index, extrapolated past the ends. */
+  function logicalToTime(logical: number): number | null {
+    const c = candlesRef.current;
+    const n = c.length;
+    if (n === 0) return null;
+    const i = Math.round(logical);
+    if (i < 0) return c[0].time + i * barStep();
+    if (i >= n) return c[n - 1].time + (i - (n - 1)) * barStep();
+    return c[i].time;
+  }
+
+  /** Chart space → pane pixels, for drawings. */
+  function project(time: number, price: number): { x: number; y: number } | null {
+    const chart = chartRef.current;
+    const series = candleSeriesRef.current;
+    const logical = timeToLogical(time);
+    if (!chart || !series || logical === null) return null;
+    // logicalToCoordinate only takes whole bars; interpolate within the bar so
+    // a 13:30 point sits halfway across a 1H candle.
+    const ts = chart.timeScale();
+    const base = Math.floor(logical);
+    const x0 = ts.logicalToCoordinate(base as Logical);
+    const x1 = ts.logicalToCoordinate((base + 1) as Logical);
+    const y = series.priceToCoordinate(price);
+    if (x0 === null || x1 === null || y === null) return null;
+    return { x: x0 + (x1 - x0) * (logical - base), y };
+  }
+
+  /** Pane pixels → chart space, snapped to the nearest bar (and OHLC with the magnet). */
+  function pointAt(x: number, y: number): { time: number; price: number } | null {
+    const chart = chartRef.current;
+    const series = candleSeriesRef.current;
+    if (!chart || !series) return null;
+    const logical = chart.timeScale().coordinateToLogical(x);
+    const price = series.coordinateToPrice(y);
+    if (logical === null || price === null || !isFinite(price)) return null;
+    const time = logicalToTime(logical);
+    if (time === null) return null;
+    if (!magnetRef.current) return { time, price };
+    const bar = candlesRef.current[Math.round(logical)];
+    if (!bar) return { time, price };
+    const levels = [bar.open, bar.high, bar.low, bar.close];
+    const nearest = levels.reduce((best, v) => (Math.abs(v - price) < Math.abs(best - price) ? v : best));
+    return { time, price: nearest };
+  }
 
   /**
    * Which drawing (if any) sits under the given container-relative pixel.
@@ -1677,25 +1762,51 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   function hitTestDrawings(x: number, y: number): DrawingHit | null {
     const chart = chartRef.current;
     const series = candleSeriesRef.current;
-    if (!chart || !series) return null;
+    if (!chart || !series || drawingsHiddenRef.current) return null;
     // Drawings live on the main pane only
     const paneHeight = chart.panes()[0]?.getHeight() ?? Infinity;
     if (y > paneHeight) return null;
 
-    const ts = chart.timeScale();
     const TOL = 6;
     const HANDLE = 9;
+    const near = (p: { x: number; y: number }) => Math.hypot(x - p.x, y - p.y) <= HANDLE;
 
-    for (const t of trendLinesRef.current) {
-      if (t.symbol !== symbolRef.current) continue;
-      const x1 = ts.timeToCoordinate(t.t1 as UTCTimestamp);
-      const x2 = ts.timeToCoordinate(t.t2 as UTCTimestamp);
-      const y1 = series.priceToCoordinate(t.p1);
-      const y2 = series.priceToCoordinate(t.p2);
-      if (x1 === null || x2 === null || y1 === null || y2 === null) continue;
-      if (Math.hypot(x - x1, y - y1) <= HANDLE) return { kind: "trend", id: t.id, part: "p1" };
-      if (Math.hypot(x - x2, y - y2) <= HANDLE) return { kind: "trend", id: t.id, part: "p2" };
-      if (distToSegment(x, y, x1, y1, x2, y2) <= TOL) return { kind: "trend", id: t.id, part: "body" };
+    // Last drawn is on top, so test newest first
+    const shapes = trendLinesRef.current.filter((t) => t.symbol === symbolRef.current);
+    for (let i = shapes.length - 1; i >= 0; i--) {
+      const t = shapes[i];
+      const kind = t.kind ?? "trend";
+      const a = project(t.t1, t.p1);
+      const b = project(t.t2, t.p2);
+      if (!a || !b) continue;
+      const hit = (part: "p1" | "p2" | "body"): DrawingHit => ({ kind: "shape", id: t.id, part });
+
+      if (kind === "text") {
+        const w = textBoxWidth(t.text);
+        if (x >= a.x && x <= a.x + w && Math.abs(y - a.y) <= 11) return hit("body");
+        continue;
+      }
+      if (near(a)) return hit("p1");
+      if (near(b)) return hit("p2");
+      if (kind === "trend" && distToSegment(x, y, a.x, a.y, b.x, b.y) <= TOL) return hit("body");
+      if (kind === "ray" && b.x !== a.x) {
+        const width = chart.timeScale().width();
+        const ex = b.x > a.x ? width : 0;
+        const ey = a.y + ((b.y - a.y) / (b.x - a.x)) * (ex - a.x);
+        if (distToSegment(x, y, a.x, a.y, ex, ey) <= TOL) return hit("body");
+      }
+      if (kind === "rect" || kind === "fib") {
+        const inX = x >= Math.min(a.x, b.x) - TOL && x <= Math.max(a.x, b.x) + TOL;
+        let inY = y >= Math.min(a.y, b.y) - TOL && y <= Math.max(a.y, b.y) + TOL;
+        if (kind === "fib" && !inY) {
+          // Grab any level line, including ones outside the anchor span
+          inY = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1].some((lvl) => {
+            const py = series.priceToCoordinate(fibPrice(t, lvl));
+            return py !== null && Math.abs(y - py) <= TOL;
+          });
+        }
+        if (inX && inY) return hit("body");
+      }
     }
 
     for (const p of priceLinesRef.current) {
@@ -1705,6 +1816,51 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     }
     return null;
   }
+
+  // Shape placement listens to the DOM click, not the chart's: the chart
+  // swallows a second click that lands within 500ms of the first unless it's
+  // on the same spot, which loses the end point of quickly drawn shapes.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onClick = (e: MouseEvent) => {
+      const shapeTool = toolRef.current;
+      const chart = chartRef.current;
+      if (!isShapeTool(shapeTool) || !chart) return;
+      const r = el.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      // Only on the price pane, left of the price axis
+      if (y > (chart.panes()[0]?.getHeight() ?? 0) || x > chart.timeScale().width()) return;
+      const pt = pointAt(x, y);
+      if (!pt) return;
+      if (shapeTool === "text") {
+        // One click: ask for the note right where it will sit
+        setTextDraft({ x, y, time: pt.time, price: pt.price });
+        return;
+      }
+      const current = trendDraftRef.current;
+      if (current.phase === "placing" && current.a) {
+        addTrendLineRef.current({
+          symbol: symbolRef.current,
+          kind: shapeTool,
+          t1: current.a.time,
+          p1: current.a.price,
+          t2: pt.time,
+          p2: pt.price,
+        });
+        trendDraftRef.current = INITIAL_MEASURE;
+        setTrendDraft(INITIAL_MEASURE);
+        setToolRef.current("cursor"); // back to navigation, like TradingView
+      } else {
+        trendDraftRef.current = { phase: "placing", a: pt, b: pt };
+        setTrendDraft({ phase: "placing", a: pt, b: pt });
+      }
+    };
+    el.addEventListener("click", onClick);
+    return () => el.removeEventListener("click", onClick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Selective erase + drag-to-move. A capture-phase mousedown wins the race
   // against the chart's own pan handler, so grabbing a line doesn't scroll
@@ -1732,19 +1888,20 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       if (toolNow !== "cursor" && toolNow !== "eraser") return;
       const { x, y } = posOf(e);
       const hit = hitTestDrawings(x, y);
-      if (!hit) return;
+      if (!hit || drawingsLockedRef.current) return;
 
       e.preventDefault();
       e.stopPropagation(); // keep lightweight-charts from starting a pan
 
       if (toolNow === "eraser") {
-        if (hit.kind === "trend") removeTrendLineRef.current(hit.id);
+        if (hit.kind === "shape") removeTrendLineRef.current(hit.id);
         else removePriceLineRef.current(hit.id);
         return;
       }
 
+      checkpointRef.current(); // one undo step per drag
       const orig =
-        hit.kind === "trend"
+        hit.kind === "shape"
           ? (() => {
               const t = trendLinesRef.current.find((l) => l.id === hit.id)!;
               return { t1: t.t1, p1: t.p1, t2: t.t2, p2: t.p2 };
@@ -1760,16 +1917,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         const toolNow = toolRef.current;
         if (toolNow === "cursor" || toolNow === "eraser") {
           const { x, y } = posOf(e);
-          const hit = hitTestDrawings(x, y);
+          const hit = drawingsLockedRef.current ? null : hitTestDrawings(x, y);
           el.style.cursor = hit ? (toolNow === "eraser" ? "pointer" : "grab") : "";
         }
         return;
       }
 
-      const chart = chartRef.current;
       const series = candleSeriesRef.current;
-      if (!chart || !series) return;
-      const ts = chart.timeScale();
+      if (!series) return;
       const { x, y } = posOf(e);
 
       if (drag.hit.kind === "hline") {
@@ -1784,13 +1939,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       const dx = x - drag.startX;
       const dy = y - drag.startY;
       const shifted = (t: number, p: number) => {
-        const px = ts.timeToCoordinate(t as UTCTimestamp);
-        const py = series.priceToCoordinate(p);
-        if (px === null || py === null) return null;
-        const nt = ts.coordinateToTime(px + dx);
-        const np = series.coordinateToPrice(py + dy);
-        if (nt === null || np === null || !isFinite(np)) return null;
-        return { t: Number(nt), p: np };
+        const at = project(t, p);
+        if (!at) return null;
+        const n = pointAt(at.x + dx, at.y + dy);
+        return n ? { t: n.time, p: n.price } : null;
       };
 
       if (drag.hit.part === "p1") {
@@ -1852,9 +2004,23 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   // Escape cancels whatever is being drawn and returns to the cursor
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const typing = (e.target as HTMLElement | null)?.closest("input, textarea");
+      // Ctrl/Cmd+Z undoes the last drawing change, Ctrl+Y / Ctrl+Shift+Z redoes
+      if ((e.ctrlKey || e.metaKey) && !typing) {
+        const k = e.key.toLowerCase();
+        if (k === "z" && !e.shiftKey) {
+          e.preventDefault();
+          undoRef.current.undo();
+        } else if (k === "y" || (k === "z" && e.shiftKey)) {
+          e.preventDefault();
+          undoRef.current.redo();
+        }
+        return;
+      }
       if (e.key !== "Escape") return;
       setMeasure(INITIAL_MEASURE);
       setTrendDraft(INITIAL_MEASURE);
+      setTextDraft(null);
       if (toolRef.current !== "cursor") setToolRef.current("cursor");
     };
     window.addEventListener("keydown", onKey);
@@ -1910,31 +2076,25 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     return () => el.removeEventListener("dblclick", onDbl);
   }, []);
 
-  // Paint the symbol's trend lines (plus the one being placed, dashed)
+  // Paint the symbol's drawings (plus the one being placed, dashed)
   useEffect(() => {
-    const prim = trendSegRef.current;
+    const prim = shapesRef.current;
     if (!prim) return;
-    const segs: Segment[] = trendLines
+    const shapes: ShapeView[] = trendLines
       .filter((t) => t.symbol === symbol)
-      .map((t) => ({
-        t1: t.t1 as UTCTimestamp,
-        v1: t.p1,
-        t2: t.t2 as UTCTimestamp,
-        v2: t.p2,
-        color: TV_COLORS.blue,
-      }));
-    if (trendDraft.phase === "placing" && trendDraft.a && trendDraft.b) {
-      segs.push({
-        t1: trendDraft.a.time as UTCTimestamp,
-        v1: trendDraft.a.price,
-        t2: trendDraft.b.time as UTCTimestamp,
-        v2: trendDraft.b.price,
-        color: TV_COLORS.blue,
-        dashed: true,
+      .map((t) => ({ ...t, kind: t.kind ?? "trend" }));
+    if (trendDraft.phase === "placing" && trendDraft.a && trendDraft.b && isShapeTool(tool)) {
+      shapes.push({
+        kind: tool,
+        t1: trendDraft.a.time,
+        p1: trendDraft.a.price,
+        t2: trendDraft.b.time,
+        p2: trendDraft.b.price,
+        draft: true,
       });
     }
-    prim.setSegments(segs, segs.length > 0);
-  }, [trendLines, symbol, trendDraft]);
+    prim.setShapes(shapes, !drawingsHidden);
+  }, [trendLines, symbol, trendDraft, tool, drawingsHidden]);
 
   /**
    * Recolor every volume bar by its relative volume (bar ÷ 21-bar average),
@@ -2723,6 +2883,16 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     ts.setVisibleLogicalRange({ from: Math.max(0, n - 180), to: n + 8 });
   }
 
+  /** Empty every series and readout — used when switching to uncached data. */
+  function clearChart() {
+    candlesRef.current = [];
+    chartRef.current?.panes().forEach((pane) => pane.getSeries().forEach((s) => s.setData([])));
+    sessionKeyRef.current = "";
+    setLastBar(null);
+    setLastPrice(null);
+    setLastValues({});
+  }
+
   /** Push `candlesRef` into every series — candles, volume and all indicators. */
   function redrawAll() {
     const klines = candlesRef.current;
@@ -2970,13 +3140,17 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     async function load(attempt = 0) {
       try {
         // Instant paint from cache when revisiting a pair/timeframe; fresh data
-        // replaces it a moment later.
+        // replaces it a moment later. Without a cache, wipe the previous
+        // chart at once so the old symbol never lingers under the new title.
         const cached = attempt === 0 ? candleCache.get(cacheKey) : undefined;
         if (cached) {
           candlesRef.current = cached.slice();
           redrawAll();
           frameRecent();
           requestAnimationFrame(() => recomputePaneOffsets());
+        } else if (attempt === 0) {
+          clearChart();
+          setLoading(true);
         }
 
         const klines = await fetchCandles(
@@ -2989,6 +3163,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         );
         if (cancelled) return;
         setLoadError(false);
+        setLoading(false);
         candlesRef.current = klines;
         candleCache.set(cacheKey, klines.slice());
         redrawAll();
@@ -3060,7 +3235,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         };
       } catch (e) {
         console.error("Failed to load chart data:", e);
-        if (!cancelled && attempt >= 1) setLoadError(true);
+        if (!cancelled && attempt >= 1) {
+          setLoadError(true);
+          setLoading(false);
+        }
         // Retry with backoff — a flaky connection must not leave a dead chart.
         // After the retries run out, the watchdog keeps trying via resync().
         if (!cancelled && attempt < 4) {
@@ -3078,6 +3256,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       loadMoreRef.current = null;
       setLoadingHistory(false);
       setLoadError(false);
+      setLoading(false);
       clearInterval(watchdog);
       document.removeEventListener("visibilitychange", onWake);
       window.removeEventListener("online", onWake);
@@ -3217,6 +3396,36 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       <div ref={containerRef} className="h-full w-full" />
       {measureRender}
 
+      {textDraft && (
+        <input
+          autoFocus
+          placeholder="Escribe y pulsa Enter"
+          style={{ left: textDraft.x, top: textDraft.y - 14 }}
+          className="absolute z-30 h-7 w-56 rounded border border-tv-blue bg-tv-surface px-2 text-[13px] text-tv-text outline-none"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              const text = e.currentTarget.value.trim();
+              if (text) {
+                addTrendLine({
+                  symbol,
+                  kind: "text",
+                  t1: textDraft.time,
+                  p1: textDraft.price,
+                  t2: textDraft.time,
+                  p2: textDraft.price,
+                  text,
+                });
+              }
+              setTextDraft(null);
+              setTool("cursor");
+            } else if (e.key === "Escape") {
+              setTextDraft(null);
+            }
+          }}
+          onBlur={() => setTextDraft(null)}
+        />
+      )}
+
       {/* Covers whatever the chart still shows from the previous market, so
           stale candles are never read as this one's */}
       {loadError && (
@@ -3238,6 +3447,15 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             >
               Reintentar
             </button>
+          </div>
+        </div>
+      )}
+
+      {loading && !loadError && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+          <div className="flex items-center gap-2 rounded-lg border border-tv-border bg-tv-surface/90 px-3 py-2 text-xs text-tv-text-muted">
+            <span className="h-3 w-3 animate-spin rounded-full border-2 border-tv-border-strong border-t-tv-accent" />
+            Cargando {exchange === "stocks" ? stockLabel(symbol) : symbol}…
           </div>
         </div>
       )}

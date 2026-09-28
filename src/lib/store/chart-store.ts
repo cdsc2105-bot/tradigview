@@ -82,10 +82,23 @@ export const LAYOUT_PRESETS: Record<LayoutKey, Record<IndicatorKey, boolean>> = 
   },
 };
 
-/** Timeframes that get a button in the header, in display order. */
+/** Every timeframe on offer, shortest first (also the order buttons show in). */
+export const ALL_TIMEFRAMES: Timeframe[] = [
+  "1m", "2m", "3m", "5m", "15m", "30m",
+  "1h", "2h", "3h", "4h", "6h", "12h",
+  "1d", "3d", "1w",
+];
+
+/** Default favorites — the timeframes that get a button in the header. */
 export const TIMEFRAME_BUTTONS: Timeframe[] = ["15m", "1h", "2h", "3h", "4h", "1d"];
 
-export type DrawingTool = "cursor" | "hline" | "trend" | "measure" | "eraser";
+/** Drawings placed with two clicks (text takes one), kept per symbol. */
+export type ShapeKind = "trend" | "ray" | "fib" | "rect" | "text";
+
+export type DrawingTool = "cursor" | "hline" | "measure" | "eraser" | ShapeKind;
+
+/** Tools that place a shape (as opposed to navigating or erasing). */
+export const SHAPE_TOOLS: readonly ShapeKind[] = ["trend", "ray", "fib", "rect", "text"];
 
 export interface PriceLine {
   id: string;
@@ -93,15 +106,31 @@ export interface PriceLine {
   price: number;
 }
 
-/** A user-drawn trend line between two chart points, kept per symbol. */
+/**
+ * A user drawing anchored at two chart points (time, price), kept per symbol:
+ * trend line, ray, Fibonacci retracement, rectangle — or a text note, which
+ * uses only the first point.
+ */
 export interface TrendLine {
   id: string;
   symbol: string;
+  /** Missing on drawings saved before other shapes existed → "trend" */
+  kind?: ShapeKind;
   t1: number;
   p1: number;
   t2: number;
   p2: number;
+  /** Text notes only */
+  text?: string;
 }
+
+/** What undo/redo swaps back and forth. */
+interface DrawingSnapshot {
+  priceLines: PriceLine[];
+  trendLines: TrendLine[];
+}
+
+const MAX_HISTORY = 50;
 
 export interface IndicatorConfig {
   ema20: number;
@@ -412,6 +441,8 @@ interface ChartState {
   /** Periods and parameters for each indicator */
   config: IndicatorConfig;
   watchlist: string[];
+  /** Starred timeframes, shown as buttons in the header */
+  favoriteTimeframes: Timeframe[];
   /** Active chart layout */
   layout: LayoutKey;
   /** Indicator set each layout had when the user last left it */
@@ -421,6 +452,15 @@ interface ChartState {
   tool: DrawingTool;
   priceLines: PriceLine[];
   trendLines: TrendLine[];
+  /** Snap drawing points to the nearest open/high/low/close */
+  magnet: boolean;
+  /** Drawings can't be moved or erased */
+  drawingsLocked: boolean;
+  /** Drawings are hidden (kept, just not drawn) */
+  drawingsHidden: boolean;
+  /** Undo / redo stacks of drawing states */
+  undoStack: DrawingSnapshot[];
+  redoStack: DrawingSnapshot[];
   symbolDialogOpen: boolean;
   /** Watchlist drawer open (mobile only; desktop shows it inline) */
   watchlistOpen: boolean;
@@ -435,6 +475,8 @@ interface ChartState {
   setSymbol: (s: string) => void;
   setExchange: (e: Exchange) => void;
   setTimeframe: (t: Timeframe) => void;
+  /** Star / unstar a timeframe */
+  toggleFavoriteTimeframe: (t: Timeframe) => void;
   /** Switch layout, saving the current indicator set under the old one */
   setLayout: (l: LayoutKey) => void;
   /** Refetch the chart data from scratch */
@@ -465,12 +507,32 @@ interface ChartState {
   ) => void;
   /** Clears price lines AND trend lines for the symbol (or all) */
   clearPriceLines: (symbol?: string) => void;
+  /** Save the current drawings for undo — call before a drag starts */
+  checkpointDrawings: () => void;
+  undoDrawing: () => void;
+  redoDrawing: () => void;
+  setMagnet: (v: boolean) => void;
+  setDrawingsLocked: (v: boolean) => void;
+  setDrawingsHidden: (v: boolean) => void;
   setSymbolDialogOpen: (v: boolean) => void;
   setWatchlistOpen: (v: boolean) => void;
   setSettingsTarget: (k: IndicatorKey | null) => void;
   /** Toggle a pane between big and normal (same key twice = restore) */
   toggleMaximizedPane: (k: IndicatorKey) => void;
 }
+
+const snapshotOf = (s: DrawingSnapshot): DrawingSnapshot => ({
+  priceLines: s.priceLines,
+  trendLines: s.trendLines,
+});
+
+/** Push the current drawings onto the undo stack (and clear redo). */
+const withCheckpoint = (
+  s: DrawingSnapshot & { undoStack: DrawingSnapshot[] },
+): { undoStack: DrawingSnapshot[]; redoStack: DrawingSnapshot[] } => ({
+  undoStack: [...s.undoStack, snapshotOf(s)].slice(-MAX_HISTORY),
+  redoStack: [],
+});
 
 export const useChartStore = create<ChartState>()(
   persist(
@@ -479,6 +541,7 @@ export const useChartStore = create<ChartState>()(
       exchange: "binance" as Exchange,
       timeframe: "15m" as Timeframe,
       indicators: { ...LAYOUT_PRESETS.vwap },
+      favoriteTimeframes: TIMEFRAME_BUTTONS,
       layout: "vwap" as LayoutKey,
       layoutIndicators: {},
       hidden: {
@@ -508,6 +571,11 @@ export const useChartStore = create<ChartState>()(
       tool: "cursor",
       priceLines: [],
       trendLines: [],
+      magnet: false,
+      drawingsLocked: false,
+      drawingsHidden: false,
+      undoStack: [],
+      redoStack: [],
       symbolDialogOpen: false,
       watchlistOpen: false,
       settingsTarget: null,
@@ -517,6 +585,14 @@ export const useChartStore = create<ChartState>()(
       setSymbol: (symbol) => set({ symbol }),
       setExchange: (exchange) => set({ exchange }),
       setTimeframe: (timeframe) => set({ timeframe }),
+      toggleFavoriteTimeframe: (t) =>
+        set((s) => {
+          const favs = s.favoriteTimeframes.includes(t)
+            ? s.favoriteTimeframes.filter((x) => x !== t)
+            : [...s.favoriteTimeframes, t];
+          // Keep them in duration order however they were starred
+          return { favoriteTimeframes: ALL_TIMEFRAMES.filter((x) => favs.includes(x)) };
+        }),
       setLayout: (layout) =>
         set((s) => {
           if (layout === s.layout) return s;
@@ -649,6 +725,7 @@ export const useChartStore = create<ChartState>()(
       setTool: (tool) => set({ tool }),
       addPriceLine: (price, symbol) =>
         set((state) => ({
+          ...withCheckpoint(state),
           priceLines: [
             ...state.priceLines,
             {
@@ -663,6 +740,7 @@ export const useChartStore = create<ChartState>()(
         })),
       addTrendLine: (line) =>
         set((state) => ({
+          ...withCheckpoint(state),
           trendLines: [
             ...state.trendLines,
             {
@@ -676,10 +754,12 @@ export const useChartStore = create<ChartState>()(
         })),
       removePriceLine: (id) =>
         set((state) => ({
+          ...withCheckpoint(state),
           priceLines: state.priceLines.filter((p) => p.id !== id),
         })),
       removeTrendLine: (id) =>
         set((state) => ({
+          ...withCheckpoint(state),
           trendLines: state.trendLines.filter((t) => t.id !== id),
         })),
       movePriceLine: (id, price) =>
@@ -696,6 +776,7 @@ export const useChartStore = create<ChartState>()(
         })),
       clearPriceLines: (symbol) =>
         set((state) => ({
+          ...withCheckpoint(state),
           priceLines: symbol
             ? state.priceLines.filter((p) => p.symbol !== symbol)
             : [],
@@ -703,6 +784,30 @@ export const useChartStore = create<ChartState>()(
             ? state.trendLines.filter((t) => t.symbol !== symbol)
             : [],
         })),
+      checkpointDrawings: () => set((state) => withCheckpoint(state)),
+      undoDrawing: () =>
+        set((state) => {
+          const prev = state.undoStack.at(-1);
+          if (!prev) return state;
+          return {
+            ...prev,
+            undoStack: state.undoStack.slice(0, -1),
+            redoStack: [...state.redoStack, snapshotOf(state)],
+          };
+        }),
+      redoDrawing: () =>
+        set((state) => {
+          const next = state.redoStack.at(-1);
+          if (!next) return state;
+          return {
+            ...next,
+            redoStack: state.redoStack.slice(0, -1),
+            undoStack: [...state.undoStack, snapshotOf(state)],
+          };
+        }),
+      setMagnet: (magnet) => set({ magnet }),
+      setDrawingsLocked: (drawingsLocked) => set({ drawingsLocked }),
+      setDrawingsHidden: (drawingsHidden) => set({ drawingsHidden }),
       setSymbolDialogOpen: (symbolDialogOpen) => set({ symbolDialogOpen }),
       setWatchlistOpen: (watchlistOpen) => set({ watchlistOpen }),
       setSettingsTarget: (settingsTarget) => set({ settingsTarget }),
@@ -831,6 +936,11 @@ export const useChartStore = create<ChartState>()(
         symbol: s.symbol,
         exchange: s.exchange,
         timeframe: s.timeframe,
+        favoriteTimeframes: s.favoriteTimeframes,
+        // Drawings survive a reload, like on any charting platform
+        priceLines: s.priceLines,
+        trendLines: s.trendLines,
+        magnet: s.magnet,
         indicators: s.indicators,
         layout: s.layout,
         layoutIndicators: s.layoutIndicators,

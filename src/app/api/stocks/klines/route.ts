@@ -10,7 +10,7 @@ const YF = "https://query1.finance.yahoo.com/v8/finance/chart";
 
 /**
  * Our timeframe → Yahoo interval + how much history to ask for. Yahoo has no
- * 3m/2h/3h/4h, so those are aggregated from the next smaller interval.
+ * 3m/2h/3h/4h/6h/12h, so those are aggregated from the next smaller interval.
  */
 const MAP: Record<string, { interval: string; range: string; bucket?: number }> = {
   "1m": { interval: "1m", range: "5d" },
@@ -23,6 +23,8 @@ const MAP: Record<string, { interval: string; range: string; bucket?: number }> 
   "2h": { interval: "60m", range: "730d", bucket: 7200 },
   "3h": { interval: "60m", range: "730d", bucket: 10800 },
   "4h": { interval: "60m", range: "730d", bucket: 14400 },
+  "6h": { interval: "60m", range: "730d", bucket: 21600 },
+  "12h": { interval: "60m", range: "730d", bucket: 43200 },
   "1d": { interval: "1d", range: "10y" },
   "3d": { interval: "1d", range: "10y", bucket: 259200 },
   "1w": { interval: "1wk", range: "10y" },
