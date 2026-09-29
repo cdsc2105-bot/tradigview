@@ -163,9 +163,9 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   ema20: 20,
   ema50: 50,
   ema200: 200,
-  // 7 (not the classic 14) to match CdeCripto's RSI, which plunges deep into the
+  // 6 (not the classic 14), CdeCripto's RSI length: it plunges deep into the
   // oversold zone on sharp moves — the shorter period is what makes it reactive.
-  rsi: 7,
+  rsi: 6,
   macdFast: 12,
   macdSlow: 26,
   macdSignal: 9,
@@ -196,8 +196,8 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   rsiDivRight: 5,
   rsiMa: true,
   rsiMaPeriod: 14,
-  rsiColor: "#d1d4dc",
-  rsiMaColor: "#e2c55a",
+  rsiColor: "#cccccc",
+  rsiMaColor: "#e8c100",
   sessionOffsetMin: 90,
   ichiTenkan: 9,
   ichiKijun: 26,
@@ -262,13 +262,15 @@ export const STOCH_COLORS = {
   band: "#2196f3",
 } as const;
 
-/** RSI pane extras, matching CdeCripto's TradingView. */
+/** RSI pane extras, taken from CdeCripto's monitor. */
 export const RSI_COLORS = {
-  /** Purple 30–70 background zone, TV's RSI default */
-  band: "#7e57c2",
-  /** Divergence trend lines drawn over the RSI */
-  bull: "#26a69a",
-  bear: "#ef5350",
+  /** Violet 30–70 background zone */
+  band: "#845cff",
+  /** Oversold green / overbought red: zones, fills and divergence lines */
+  bull: "#22c55e",
+  bear: "#ef4444",
+  /** Slate for the 70 / 50 / 30 guides (and, fainter, the 100 / 0 edges) */
+  level: "#94a3b8",
 } as const;
 
 /** Colors of the three session lines, matching CdeCripto's chart. */
@@ -666,7 +668,8 @@ export const useChartStore = create<ChartState>()(
       // v4 matches Matt's real TradingView bottom: RSI + Stochastic only.
       // v5 sets the RSI period to 7 (Matt's), so it dips deep into oversold.
       // v6 adds stocks & indices to the watchlist.
-      version: 6,
+      // v7 matches CdeCripto's RSI exactly: length 6, grey line, yellow SMA.
+      version: 7,
       migrate: (persisted, version) => {
         const p = (persisted ?? {}) as Partial<ChartState>;
         let migrated =
@@ -736,6 +739,17 @@ export const useChartStore = create<ChartState>()(
             config: {
               ...migrated.config,
               rsi: DEFAULT_CONFIG.rsi, // 7 — matches Matt's deep-diving RSI
+            } as IndicatorConfig,
+          };
+        }
+        if (version < 7) {
+          migrated = {
+            ...migrated,
+            config: {
+              ...migrated.config,
+              rsi: DEFAULT_CONFIG.rsi,
+              rsiColor: DEFAULT_CONFIG.rsiColor,
+              rsiMaColor: DEFAULT_CONFIG.rsiMaColor,
             } as IndicatorConfig,
           };
         }

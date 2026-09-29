@@ -267,8 +267,8 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
           <p className="text-xs text-tv-text-muted">
             Un pivote solo se confirma cuando pasan los bares de la derecha, así
             que la etiqueta aparece unas velas por detrás — igual que en
-            TradingView. Divergencia regular = posible giro; oculta = probable
-            continuación.
+            TradingView. Se dibujan las divergencias regulares (posible giro):
+            verde alcista, roja bajista.
           </p>
         </>
       )}

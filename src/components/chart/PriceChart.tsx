@@ -255,6 +255,7 @@ interface LastValues {
   ema50?: number;
   ema200?: number;
   rsi?: number;
+  rsiMa?: number;
   macd?: number;
   macdSignal?: number;
   macdHist?: number;
@@ -303,6 +304,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const rsi30Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const rsi50Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const rsi70Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  /** Faint dashed 100 / 0 edges framing the pane */
+  const rsi100Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  const rsi0Ref = useRef<ISeriesApi<"Line"> | null>(null);
+  /** Red gradient between the RSI and 70 while overbought, green below 30 */
+  const rsiObFillRef = useRef<ISeriesApi<"Baseline"> | null>(null);
+  const rsiOsFillRef = useRef<ISeriesApi<"Baseline"> | null>(null);
   /** Purple 30–70 zone behind the RSI, like TV's default */
   const rsiFillRef = useRef<BandFillPrimitive | null>(null);
   /** Red/green divergence trend lines drawn over the RSI */
@@ -734,6 +741,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       rsi30Ref.current = null;
       rsi50Ref.current = null;
       rsi70Ref.current = null;
+      rsi100Ref.current = null;
+      rsi0Ref.current = null;
+      rsiObFillRef.current = null;
+      rsiOsFillRef.current = null;
       rsiFillRef.current = null;
       rsiSegRef.current = null;
       macdRef.current = null;
@@ -831,44 +842,84 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (!chartRef.current) return;
     if (indicators.rsi && !rsiRef.current) {
       const paneIndex = 1;
-      const guide = () =>
-        chartRef.current!.addSeries(
+      const chart = chartRef.current;
+      // CdeCripto's pane is pinned to 0–100 edge to edge, so the zones and
+      // guides always sit at the same height whatever the RSI does.
+      const autoscaleInfoProvider = () => ({
+        priceRange: { minValue: 0, maxValue: 100 },
+        margins: { above: 0, below: 0 },
+      });
+      // lineStyle: 1 dotted, 2 dashed (lightweight-charts' LineStyle enum)
+      const guide = (lineStyle: 1 | 2, opacity: number) =>
+        chart.addSeries(
           LineSeries,
           {
-            color: TV_COLORS.textMuted,
+            color: hexToRgba(RSI_COLORS.level, opacity),
             lineWidth: 1,
-            lineStyle: 2,
+            lineStyle,
             priceLineVisible: false,
             lastValueVisible: false,
+            crosshairMarkerVisible: false,
+            autoscaleInfoProvider,
           },
           paneIndex,
         );
-      const r = chartRef.current.addSeries(
-        LineSeries,
-        {
-          color: configRef.current.rsiColor,
-          lineWidth: 1,
-          priceLineVisible: false,
-          lastValueVisible: true,
-        },
-        paneIndex,
-      );
+      // Gradient from the RSI line back to the 70 / 30 level: strong at the
+      // extreme, almost clear at the level itself.
+      const extremeFill = (level: number, color: string, above: boolean) =>
+        chart.addSeries(
+          BaselineSeries,
+          {
+            baseValue: { type: "price", price: level },
+            topFillColor1: above ? hexToRgba(color, 34) : "transparent",
+            topFillColor2: above ? hexToRgba(color, 3) : "transparent",
+            bottomFillColor1: above ? "transparent" : hexToRgba(color, 3),
+            bottomFillColor2: above ? "transparent" : hexToRgba(color, 34),
+            topLineColor: "transparent",
+            bottomLineColor: "transparent",
+            lineVisible: false,
+            priceLineVisible: false,
+            lastValueVisible: false,
+            crosshairMarkerVisible: false,
+            autoscaleInfoProvider,
+          },
+          paneIndex,
+        );
+      rsiObFillRef.current = extremeFill(70, RSI_COLORS.bear, true);
+      rsiOsFillRef.current = extremeFill(30, RSI_COLORS.bull, false);
+      rsi100Ref.current = guide(2, 8);
+      rsi70Ref.current = guide(2, 52);
+      rsi50Ref.current = guide(1, 52);
+      rsi30Ref.current = guide(2, 52);
+      rsi0Ref.current = guide(2, 8);
       // MA over the RSI (yellow), like CdeCripto's panel
-      const rMa = chartRef.current.addSeries(
+      const rMa = chart.addSeries(
         LineSeries,
         {
           color: configRef.current.rsiMaColor,
           lineWidth: 1,
           priceLineVisible: false,
           lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          autoscaleInfoProvider,
         },
         paneIndex,
       );
+      const r = chart.addSeries(
+        LineSeries,
+        {
+          color: configRef.current.rsiColor,
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: true,
+          priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+          autoscaleInfoProvider,
+        },
+        paneIndex,
+      );
+      r.priceScale().applyOptions({ scaleMargins: { top: 0, bottom: 0 } });
       rsiRef.current = r;
       rsiMaRef.current = rMa;
-      rsi30Ref.current = guide();
-      rsi50Ref.current = guide();
-      rsi70Ref.current = guide();
       rsiFillRef.current = new BandFillPrimitive();
       r.attachPrimitive(rsiFillRef.current);
       rsiSegRef.current = new SegmentsPrimitive();
@@ -884,11 +935,18 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       if (rsi30Ref.current) chartRef.current.removeSeries(rsi30Ref.current);
       if (rsi50Ref.current) chartRef.current.removeSeries(rsi50Ref.current);
       if (rsi70Ref.current) chartRef.current.removeSeries(rsi70Ref.current);
+      for (const extra of [rsi100Ref, rsi0Ref, rsiObFillRef, rsiOsFillRef]) {
+        if (extra.current) chartRef.current.removeSeries(extra.current);
+      }
       rsiRef.current = null;
       rsiMaRef.current = null;
       rsi30Ref.current = null;
       rsi50Ref.current = null;
       rsi70Ref.current = null;
+      rsi100Ref.current = null;
+      rsi0Ref.current = null;
+      rsiObFillRef.current = null;
+      rsiOsFillRef.current = null;
       rsiFillRef.current = null;
       rsiSegRef.current = null;
     }
@@ -1426,6 +1484,9 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (rsi30Ref.current) rsi30Ref.current.applyOptions({ visible: v("rsi") });
     if (rsi50Ref.current) rsi50Ref.current.applyOptions({ visible: v("rsi") });
     if (rsi70Ref.current) rsi70Ref.current.applyOptions({ visible: v("rsi") });
+    for (const extra of [rsi100Ref, rsi0Ref, rsiObFillRef, rsiOsFillRef]) {
+      extra.current?.applyOptions({ visible: v("rsi") });
+    }
     if (macdRef.current) macdRef.current.applyOptions({ visible: v("macd") });
     if (macdSignalRef.current) macdSignalRef.current.applyOptions({ visible: v("macd") });
     if (macdHistRef.current) macdHistRef.current.applyOptions({ visible: v("macd") });
@@ -2076,10 +2137,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     }));
     rsiRef.current.applyOptions({ color: cfg.rsiColor });
     rsiRef.current.setData(data);
+    rsiObFillRef.current?.setData(data);
+    rsiOsFillRef.current?.setData(data);
     updateRSIDivergences(c, points);
 
+    const ma = cfg.rsiMa ? smoothSMA(points, cfg.rsiMaPeriod) : [];
     if (rsiMaRef.current) {
-      const ma = cfg.rsiMa ? smoothSMA(points, cfg.rsiMaPeriod) : [];
       rsiMaRef.current.applyOptions({ color: cfg.rsiMaColor });
       rsiMaRef.current.setData(
         ma.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })),
@@ -2094,17 +2157,23 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           { time: data[0].time, value: level },
           { time: data[data.length - 1].time, value: level },
         ]);
-      guide(rsi30Ref.current, 30);
-      guide(rsi50Ref.current, 50);
+      guide(rsi100Ref.current, 100);
       guide(rsi70Ref.current, 70);
+      guide(rsi50Ref.current, 50);
+      guide(rsi30Ref.current, 30);
+      guide(rsi0Ref.current, 0);
     }
-    setLastValues((prev) => ({ ...prev, rsi: data.at(-1)?.value }));
+    setLastValues((prev) => ({
+      ...prev,
+      rsi: data.at(-1)?.value,
+      rsiMa: ma.at(-1)?.value,
+    }));
   }
 
   /**
-   * RSI background like Matt's pane: red zone above 70, purple 30–70, green
-   * below 30 — plus a stronger fill between the RSI line and the band edge
-   * while it's overbought/oversold, so the extremes pop.
+   * RSI background exactly as CdeCripto's monitor: a faint red strip at the
+   * 85–100 extreme, violet through the 30–70 middle, green at 0–10. The
+   * overbought / oversold gradients are separate Baseline series.
    */
   function updateRSIZones(data: { time: UTCTimestamp; value: number }[]) {
     const fill = rsiFillRef.current;
@@ -2124,36 +2193,20 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       color: hexToRgba(color, opacity),
     });
 
-    // Fill collapses to zero height where the RSI is inside the band, so a
-    // single region per side renders only the overbought / oversold stretches.
-    const overbought: FillBand[] = data.map((p) => ({
-      time: p.time,
-      top: Math.max(p.value, 70),
-      bottom: 70,
-    }));
-    const oversold: FillBand[] = data.map((p) => ({
-      time: p.time,
-      top: 30,
-      bottom: Math.min(p.value, 30),
-    }));
-
-    // Zones exactly as Matt's pane: red only at the 85–100 extreme, purple
-    // through the 30–70 middle, green only at the 0–15 extreme.
     fill.setRegions(
       [
-        zone(100, 85, RSI_COLORS.bear, 10),
+        zone(100, 85, RSI_COLORS.bear, 11),
         zone(70, 30, RSI_COLORS.band, 10),
-        zone(15, 0, RSI_COLORS.bull, 10),
-        { bands: overbought, color: hexToRgba(RSI_COLORS.bear, 30) },
-        { bands: oversold, color: hexToRgba(RSI_COLORS.bull, 30) },
+        zone(10, 0, RSI_COLORS.bull, 11),
       ],
       true,
     );
   }
 
   /**
-   * Red/green divergence lines from pivot to pivot on the RSI, like Matt's pane.
-   * Clean look — no arrows or text labels, just the connecting lines.
+   * Red/green divergence lines from pivot to pivot on the RSI, like CdeCripto's
+   * pane. Clean look — no arrows or text labels, and only regular divergences
+   * (his monitor doesn't draw the hidden ones).
    */
   function updateRSIDivergences(
     c: Candle[],
@@ -2167,19 +2220,16 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       return;
     }
 
-    // Hidden divergences dashed so continuation vs. reversal reads at a glance.
     const divs = rsiDivergences(c, points, cfg.rsiDivLeft, cfg.rsiDivRight);
-    const segments: Segment[] = divs.map((d) => {
-      const bullish = d.kind === "bull" || d.kind === "hidden_bull";
-      return {
+    const segments: Segment[] = divs
+      .filter((d) => d.kind === "bull" || d.kind === "bear")
+      .map((d) => ({
         t1: d.prevTime as UTCTimestamp,
         v1: d.prevValue,
         t2: d.time as UTCTimestamp,
         v2: d.value,
-        color: bullish ? RSI_COLORS.bull : RSI_COLORS.bear,
-        dashed: d.kind === "hidden_bull" || d.kind === "hidden_bear",
-      };
-    });
+        color: d.kind === "bull" ? RSI_COLORS.bull : RSI_COLORS.bear,
+      }));
     rsiSegRef.current?.setSegments(segments, true);
   }
 
@@ -3329,6 +3379,17 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
             name={`RSI ${config.rsi}`}
             value={lastValues.rsi !== undefined ? lastValues.rsi.toFixed(2) : undefined}
             color={config.rsiColor}
+            extras={
+              config.rsiMa
+                ? [
+                    {
+                      label: `SMA ${config.rsiMaPeriod}`,
+                      value: lastValues.rsiMa?.toFixed(2),
+                      color: config.rsiMaColor,
+                    },
+                  ]
+                : undefined
+            }
             hidden={hidden.rsi}
             onToggleHide={() => toggleHidden("rsi")}
             onSettings={() => setSettingsTarget("rsi")}

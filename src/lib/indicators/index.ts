@@ -60,16 +60,16 @@ export function rsi(candles: Candle[], period = 14): IndicatorPoint[] {
   }
   gain /= period;
   loss /= period;
-  let rs = loss === 0 ? 100 : gain / loss;
-  out.push({ time: candles[period].time, value: 100 - 100 / (1 + rs) });
+  // No losses in the window pins the RSI at exactly 100, as CdeCripto does.
+  const value = () => (loss === 0 ? 100 : 100 - 100 / (1 + gain / loss));
+  out.push({ time: candles[period].time, value: value() });
   for (let i = period + 1; i < candles.length; i++) {
     const diff = candles[i].close - candles[i - 1].close;
     const g = diff > 0 ? diff : 0;
     const l = diff < 0 ? -diff : 0;
     gain = (gain * (period - 1) + g) / period;
     loss = (loss * (period - 1) + l) / period;
-    rs = loss === 0 ? 100 : gain / loss;
-    out.push({ time: candles[i].time, value: 100 - 100 / (1 + rs) });
+    out.push({ time: candles[i].time, value: value() });
   }
   return out;
 }

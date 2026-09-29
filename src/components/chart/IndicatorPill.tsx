@@ -7,6 +7,8 @@ interface Props {
   name: string;
   value?: string;
   color: string;
+  /** Secondary outputs shown after the main value, e.g. the RSI's SMA */
+  extras?: { label: string; value?: string; color: string }[];
   hidden: boolean;
   onToggleHide: () => void;
   onSettings: () => void;
@@ -20,6 +22,7 @@ export function IndicatorPill({
   name,
   value,
   color,
+  extras,
   hidden,
   onToggleHide,
   onSettings,
@@ -42,6 +45,18 @@ export function IndicatorPill({
       {value !== undefined && (
         <span className="tabular-nums text-tv-text-muted">{value}</span>
       )}
+      {extras?.map((x) => (
+        <span key={x.label} className="flex items-center gap-1">
+          <span
+            className="h-0.5 w-3 shrink-0 rounded-full"
+            style={{ background: x.color }}
+          />
+          <span className="text-tv-text-muted">{x.label}</span>
+          {x.value !== undefined && (
+            <span className="tabular-nums text-tv-text-muted">{x.value}</span>
+          )}
+        </span>
+      ))}
       <div className="ml-1 flex items-center gap-0.5">
         {onMaximize && (
           <button
