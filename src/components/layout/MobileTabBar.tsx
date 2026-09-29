@@ -9,7 +9,9 @@ import {
   useMarketOptions,
   useSwitchMarket,
 } from "@/components/header/MarketSourceSelect";
-import { TOOLS } from "@/components/layout/LeftSidebar";
+import { ACTION_ICONS, DrawIcon, TOOL_ICONS } from "@/components/drawing/icons";
+import { TOOL_GROUPS, toolDef } from "@/components/drawing/tools";
+import { useDrawingEngine } from "@/components/drawing/useDrawingEngine";
 import { useChartStore } from "@/lib/store/chart-store";
 import { cn } from "@/lib/utils";
 
@@ -51,8 +53,7 @@ export function MobileTabBar() {
   const [sheet, setSheet] = useState<Sheet>(null);
   const watchlistOpen = useChartStore((s) => s.watchlistOpen);
   const setWatchlistOpen = useChartStore((s) => s.setWatchlistOpen);
-  const tool = useChartStore((s) => s.tool);
-  const setTool = useChartStore((s) => s.setTool);
+  const { engine, state: drawing } = useDrawingEngine();
   const exchange = useChartStore((s) => s.exchange);
   const reload = useChartStore((s) => s.reload);
   const switchMarket = useSwitchMarket();
@@ -143,29 +144,55 @@ export function MobileTabBar() {
 
       {sheet === "tools" && (
         <BottomSheet title="Herramientas" onClose={() => setSheet(null)}>
-          <div className="grid grid-cols-3 gap-2 px-2">
-            {TOOLS.map((t) => {
-              const Icon = t.icon;
-              return (
+          <div className="space-y-3 px-2">
+            {TOOL_GROUPS.map((g) => (
+              <div key={g.id}>
+                <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-tv-text-dim">
+                  {g.name}
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {g.tools.map((id) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => {
+                        engine?.setTool(id);
+                        setSheet(null);
+                      }}
+                      className={cn(
+                        "draw-btn flex flex-col items-center gap-1 rounded-lg border px-1.5 py-2.5 text-center text-[11px] leading-tight",
+                        drawing.tool === id
+                          ? "border-tv-accent bg-tv-accent/10 text-tv-text"
+                          : "border-tv-border text-tv-text-muted",
+                      )}
+                    >
+                      <DrawIcon size={24}>{TOOL_ICONS[id]}</DrawIcon>
+                      {toolDef(id).name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div className="grid grid-cols-4 gap-2 pt-1">
+              {(
+                [
+                  ["Deshacer", ACTION_ICONS.undo, () => engine?.undo()],
+                  ["Rehacer", ACTION_ICONS.redo, () => engine?.redo()],
+                  ["Ocultar todos", ACTION_ICONS.eye, () => engine?.hideAll()],
+                  ["Borrar todos", ACTION_ICONS.trash, () => engine?.deleteAll()],
+                ] as const
+              ).map(([label, icon, run]) => (
                 <button
-                  key={t.key}
+                  key={label}
                   type="button"
-                  onClick={() => {
-                    setTool(t.key);
-                    setSheet(null);
-                  }}
-                  className={cn(
-                    "flex flex-col items-center gap-1.5 rounded-lg border px-2 py-3 text-[11px]",
-                    tool === t.key
-                      ? "border-tv-accent bg-tv-accent/10 text-tv-text"
-                      : "border-tv-border text-tv-text-muted",
-                  )}
+                  onClick={run}
+                  className="draw-btn flex flex-col items-center gap-1 rounded-lg border border-tv-border px-1 py-2 text-[11px] text-tv-text-muted"
                 >
-                  <Icon className="h-5 w-5" />
-                  {t.label}
+                  <DrawIcon size={22}>{icon}</DrawIcon>
+                  {label}
                 </button>
-              );
-            })}
+              ))}
+            </div>
           </div>
         </BottomSheet>
       )}

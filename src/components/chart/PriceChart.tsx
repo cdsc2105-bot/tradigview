@@ -84,6 +84,8 @@ import { formatVolume } from "@/lib/format";
 import { formatPriceFor, precisionFor } from "@/lib/precision";
 import { cn } from "@/lib/utils";
 import { IndicatorPill } from "./IndicatorPill";
+import { DrawingEngine, DRAWING_COLORS as ENGINE_COLORS, setDrawingEngine } from "@/components/drawing/engine";
+import type { Drawing } from "@/components/drawing/tools";
 import { timeframeLabel } from "./TimeframeSelector";
 import { MeasureOverlay } from "./MeasureOverlay";
 import { DRAWING_COLORS, DrawingToolbar, type DrawingSelection } from "./DrawingToolbar";
@@ -160,6 +162,51 @@ function sessionPillText(cfg: {
     parts.push(`cierre -${offsetLabel(cfg.sessionPreCloseMin)}`);
   }
   return parts.join(" · ");
+}
+
+/**
+ * Drawings made with the previous two-point tools move into the new drawing
+ * engine the first time their symbol opens, and leave the old store.
+ */
+function carryOverDrawings(symbol: string): Drawing[] {
+  const s = useChartStore.getState();
+  const shapes = s.trendLines.filter((t) => t.symbol === symbol);
+  const lines = s.priceLines.filter((p) => p.symbol === symbol);
+  if (!shapes.length && !lines.length) return [];
+  const style = (x: { color?: string; width?: number }) => ({
+    color: x.color ?? ENGINE_COLORS.accent,
+    width: x.width ?? 2,
+  });
+  const out: Drawing[] = [
+    ...shapes.map((t) => ({
+      id: t.id,
+      tool: t.kind ?? "trend",
+      points:
+        t.kind === "text"
+          ? [{ time: t.t1, price: t.p1 }]
+          : [
+              { time: t.t1, price: t.p1 },
+              { time: t.t2, price: t.p2 },
+            ],
+      style: style(t),
+      locked: t.locked === true,
+      hidden: false,
+      text: t.text,
+    })),
+    ...lines.map((p) => ({
+      id: p.id,
+      tool: "hline" as const,
+      points: [{ time: Math.floor(Date.now() / 1000), price: p.price }],
+      style: style(p),
+      locked: p.locked === true,
+      hidden: false,
+    })),
+  ];
+  useChartStore.setState({
+    trendLines: s.trendLines.filter((t) => t.symbol !== symbol),
+    priceLines: s.priceLines.filter((p) => p.symbol !== symbol),
+  });
+  return out;
 }
 
 /** Spanish label for a relative-volume reading. */
@@ -418,6 +465,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const vwapBandRefs = useRef<ISeriesApi<"Line">[]>([]);
   const vwapFillRef = useRef<BandFillPrimitive | null>(null);
   const sessionRef = useRef<SessionLinesPrimitive | null>(null);
+  /** Drawing tools engine (left rail) */
+  const drawingRef = useRef<DrawingEngine | null>(null);
   /** Day range + offset the session lines were last built for */
   const sessionKeyRef = useRef("");
   const wt1Ref = useRef<ISeriesApi<"Line"> | null>(null);
@@ -704,6 +753,16 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     chartRef.current = chart;
 
+    // TradingView-style drawing tools (left rail) on the candle pane
+    const drawing = new DrawingEngine({
+      chart,
+      series: candleSeriesRef.current,
+      container: containerRef.current,
+    });
+    drawingRef.current = drawing;
+    setDrawingEngine(drawing);
+    drawing.setStoreKey(symbolRef.current, () => carryOverDrawings(symbolRef.current));
+
     // Click handler — horizontal lines and the ruler (shapes: see below)
     const onChartClick = (param: MouseEventParams) => {
       if (!param.point || !candleSeriesRef.current) return;
@@ -718,7 +777,11 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       // Clicking the VWAP or any of its bands opens its settings, like the
       // indicator lines on TradingView. Drawings win: grabbing one stops the
       // event before it gets here.
-      if (toolRef.current === "cursor" && hitTestVwap(param.point.x, param.point.y)) {
+      if (
+        toolRef.current === "cursor" &&
+        !drawingRef.current?.isBusy() &&
+        hitTestVwap(param.point.x, param.point.y)
+      ) {
         useChartStore.getState().setSettingsTarget("vwap");
         return;
       }
@@ -817,6 +880,9 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       chart.timeScale().unsubscribeVisibleTimeRangeChange(tsRangeHandler);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(logicalRangeHandler);
       ro.disconnect();
+      drawingRef.current?.destroy();
+      drawingRef.current = null;
+      setDrawingEngine(null);
       chart.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;
@@ -2052,6 +2118,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     const onMove = (e: MouseEvent) => {
       if (!drag) {
+        // The drawing engine owns the cursor while it's drawing or hovering
+        if (drawingRef.current?.isBusy()) return;
         // Hover feedback: show a grab hand over anything draggable
         const toolNow = toolRef.current;
         if (toolNow === "cursor" || toolNow === "eraser") {
@@ -2244,6 +2312,11 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
   // A selection belongs to the symbol it was made on
   useEffect(() => () => setSelected(null), [symbol]);
+
+  // Each symbol keeps its own drawings
+  useEffect(() => {
+    drawingRef.current?.setStoreKey(symbol, () => carryOverDrawings(symbol));
+  }, [symbol]);
 
   // Paint the symbol's drawings (plus the one being placed, dashed)
   useEffect(() => {
@@ -3130,6 +3203,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     updateCipher();
     updateIchimoku();
     updateSessionLines();
+    drawingRef.current?.setData(candlesRef.current);
   }
 
   /** Publish the latest bar to the legend (OHLC row) and the price readout. */

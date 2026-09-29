@@ -152,3 +152,12 @@
     opacity: 1;
   }
 }
+
+/* Drawing tool icons (src/components/drawing/icons.tsx) */
+.draw-ico { display: block; overflow: visible; }
+.draw-ico .node { fill: var(--color-tv-panel); }
+.draw-btn:hover .draw-ico .node { fill: var(--color-tv-panel-hover); }
+.draw-ico .tint { fill: currentColor; fill-opacity: 0.16; stroke: none; }
+.draw-ico .solid { fill: currentColor; stroke: none; }
+.draw-ico .dash { stroke-dasharray: 2 2; }
+.draw-ico .dim { stroke-opacity: 0.55; }
