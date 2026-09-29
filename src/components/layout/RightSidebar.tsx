@@ -1,19 +1,40 @@
 "use client";
 
-import { X } from "lucide-react";
+import { List, X } from "lucide-react";
 import { Watchlist } from "@/components/watchlist/Watchlist";
 import { useChartStore } from "@/lib/store/chart-store";
+import { useWatchlistStore } from "@/lib/store/watchlist-store";
 
 export function RightSidebar() {
   const open = useChartStore((s) => s.watchlistOpen);
   const setOpen = useChartStore((s) => s.setWatchlistOpen);
+  const collapsed = useWatchlistStore((s) => s.panelCollapsed);
+  const setCollapsed = useWatchlistStore((s) => s.setPanelCollapsed);
 
   return (
     <>
-      {/* Desktop: static column */}
-      <aside className="hidden w-64 shrink-0 flex-col border-l border-tv-border bg-tv-panel md:flex xl:w-72">
-        <Watchlist />
-      </aside>
+      {/* Desktop: static column, or a thin strip with a reopen button when
+          hidden — the choice is remembered, like CdeCripto's "Ocultar". */}
+      {collapsed ? (
+        <div className="hidden w-10 shrink-0 flex-col items-center border-l border-tv-border bg-tv-panel pt-2 md:flex">
+          <button
+            type="button"
+            onClick={() => setCollapsed(false)}
+            title="Mostrar listas"
+            aria-label="Mostrar listas"
+            className="grid h-8 w-8 place-items-center rounded-md border border-transparent text-tv-text-muted hover:border-tv-border hover:bg-tv-panel-hover hover:text-tv-text"
+          >
+            <List className="h-[18px] w-[18px]" />
+          </button>
+        </div>
+      ) : (
+        <aside
+          aria-label="Listas de seguimiento"
+          className="hidden w-[clamp(250px,20vw,330px)] shrink-0 flex-col border-l border-tv-border bg-tv-panel md:flex"
+        >
+          <Watchlist onHide={() => setCollapsed(true)} />
+        </aside>
+      )}
 
       {/* Mobile: slide-over drawer — mounted only when open so there is no
           stale-transform / off-screen-overlay state to fight with */}
@@ -23,15 +44,15 @@ export function RightSidebar() {
             onClick={() => setOpen(false)}
             className="absolute inset-0 animate-fade-in bg-black/60"
           />
-          <aside className="absolute inset-y-0 right-0 flex w-72 max-w-[85vw] flex-col border-l border-tv-border bg-tv-panel shadow-xl">
+          <aside className="absolute inset-y-0 right-0 flex w-[22rem] max-w-[92vw] flex-col border-l border-tv-border bg-tv-panel shadow-xl">
             <div className="flex items-center justify-between border-b border-tv-border px-3 py-2">
               <span className="text-[11px] font-semibold uppercase tracking-wider text-tv-text-muted">
-                Mercados
+                Listas
               </span>
               <button
                 onClick={() => setOpen(false)}
                 className="rounded p-1 text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text"
-                aria-label="Cerrar watchlist"
+                aria-label="Cerrar listas"
               >
                 <X className="h-4 w-4" />
               </button>

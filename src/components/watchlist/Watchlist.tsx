@@ -1,344 +1,611 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { ChevronDown, EllipsisVertical, Plus, Search, Trash2 } from "lucide-react";
 import { CoinIcon } from "@/components/brand/CoinIcon";
-import { getBitgetWS } from "@/lib/exchanges/bitget-ws";
-import { stockLabel } from "@/lib/exchanges/stocks";
-import { TICKER_FETCHERS } from "@/lib/exchanges/venues";
-import { fetchSupportedSymbols } from "@/lib/exchanges/symbols";
-import { getBinanceWS, getBinanceFuturesWS } from "@/lib/binance/ws";
-import { useChartStore, type Exchange } from "@/lib/store/chart-store";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { formatPriceFor } from "@/lib/precision";
+import { marketOf, type Market } from "@/lib/exchanges/catalog";
+import { useChartStore } from "@/lib/store/chart-store";
+import { useWatchlistStore } from "@/lib/store/watchlist-store";
+import {
+  activeList,
+  addSection,
+  groups,
+  itemKey,
+  listsOf,
+  move,
+  moveSection,
+  remove,
+  removeSection,
+  renameSection,
+  sectionsOf,
+  symbolsOf,
+  toggleSection,
+  type MoveTarget,
+  type SectionItem,
+  type SymbolItem,
+} from "@/lib/watchlist/lists";
 import { cn } from "@/lib/utils";
+import { useDialogs, useMenu, type MenuOption } from "./menus";
+import { WatchlistSearch, type SearchTarget } from "./WatchlistSearch";
+import {
+  directionOf,
+  formatWlChange,
+  formatWlPct,
+  formatWlPrice,
+  useLiveTickers,
+  type TickerRow,
+} from "./useLiveTickers";
 
-interface Row {
-  price: number;
-  pct: number;
+/** Touch screens get long-press menus instead of drag-and-drop. */
+function useCoarsePointer(): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      const mq = window.matchMedia("(pointer: coarse)");
+      mq.addEventListener("change", cb);
+      return () => mq.removeEventListener("change", cb);
+    },
+    () => window.matchMedia("(pointer: coarse)").matches,
+    () => false,
+  );
 }
 
-type RowMap = Record<string, Row>;
+/** Row label: the pair as the venue names it, stocks by their short name. */
+function labelOf(m: Market): string {
+  return m.exchange === "stocks" ? m.ticker : m.symbol;
+}
 
-/** Watchlist rows repaint at most this often, however fast ticks arrive. */
-const FLUSH_MS = 250;
+/** Small venue tag so the same coin on two venues can be told apart. */
+const VENUE_TAG: Partial<Record<Market["exchange"], string>> = {
+  binance: "SPOT",
+  bitgetspot: "BG SPOT",
+  bitget: "BG",
+  bitunix: "BX SPOT",
+  bitunixf: "BX",
+};
 
 /**
- * Live 24h price + change for `symbols` on one venue: a REST snapshot for
- * instant numbers, then the venue's stream (or a poll, for stocks). Ticks are
- * buffered and flushed a few times a second so a busy market never floods
- * React with renders.
+ * Watchlist panel, a copy of CdeCripto's: named lists per mode, user sections
+ * that fold, rename and reorder, drag-and-drop (long-press menu on phones),
+ * live prices with a digit flash, and a footer with the symbol on the chart.
  */
-function useVenueTickers(exchange: Exchange, symbols: string[]): RowMap {
-  const [rows, setRows] = useState<RowMap>({});
-  const key = symbols.join(",");
-
-  useEffect(() => {
-    if (symbols.length === 0) return;
-    let cancelled = false;
-    let pending: RowMap = {};
-    let timer: ReturnType<typeof setTimeout> | null = null;
-
-    const push = (symbol: string, row: Row) => {
-      pending[symbol] = row;
-      if (timer) return;
-      timer = setTimeout(() => {
-        timer = null;
-        if (cancelled) return;
-        const batch = pending;
-        pending = {};
-        setRows((prev) => ({ ...prev, ...batch }));
-      }, FLUSH_MS);
-    };
-
-    const snapshot = (
-      tickers: { symbol: string; lastPrice: number; priceChangePercent: number }[],
-    ) => {
-      if (cancelled) return;
-      const next: RowMap = {};
-      for (const t of tickers) next[t.symbol] = { price: t.lastPrice, pct: t.priceChangePercent };
-      setRows((prev) => ({ ...prev, ...next }));
-    };
-
-    // Stream ticks keep this fresh; if none arrive for a while (WebSocket
-    // blocked on this network), fall back to polling the REST snapshot.
-    let lastTick = Date.now();
-    const pollIfSilent = (load: () => void) => {
-      const id = setInterval(() => {
-        if (!document.hidden && Date.now() - lastTick > 8_000) load();
-      }, 5_000);
-      return () => clearInterval(id);
-    };
-
-    let stop: () => void = () => {};
-    const fetchSnapshot = TICKER_FETCHERS[exchange];
-    const load = () => void fetchSnapshot(symbols).then(snapshot).catch(console.error);
-    load();
-    if (exchange === "binance" || exchange === "binancef") {
-      const ws = exchange === "binance" ? getBinanceWS() : getBinanceFuturesWS();
-      const unsub = ws.subscribeMiniTickers(symbols, (t) => {
-        lastTick = Date.now();
-        push(t.symbol, { price: t.close, pct: t.pct });
-      });
-      const stopPoll = pollIfSilent(load);
-      stop = () => {
-        unsub();
-        stopPoll();
-      };
-    } else if (exchange === "bitget" || exchange === "bitgetspot") {
-      const unsub = getBitgetWS().subscribeTickers(
-        symbols,
-        (t) => {
-          lastTick = Date.now();
-          push(t.symbol, { price: t.lastPrice, pct: t.priceChangePercent });
-        },
-        exchange === "bitget" ? "USDT-FUTURES" : "SPOT",
-      );
-      const stopPoll = pollIfSilent(load);
-      stop = () => {
-        unsub();
-        stopPoll();
-      };
-    } else {
-      // Stocks and Bitunix: no stream the browser can use — poll every 5s.
-      const id = setInterval(() => {
-        if (!document.hidden) load();
-      }, 5_000);
-      stop = () => clearInterval(id);
-    }
-
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-      stop();
-    };
-    // `key` stands in for `symbols` (a new array every render)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [exchange, key]);
-
-  return rows;
-}
-
-export function Watchlist() {
-  const watchlist = useChartStore((s) => s.watchlist);
-  const symbol = useChartStore((s) => s.symbol);
-  const exchange = useChartStore((s) => s.exchange);
+export function Watchlist({ onHide }: { onHide?: () => void }) {
+  const mode = useChartStore((s) => s.layout);
+  const chartSymbol = useChartStore((s) => s.symbol);
+  const chartExchange = useChartStore((s) => s.exchange);
   const setSymbol = useChartStore((s) => s.setSymbol);
-  const addToWatchlist = useChartStore((s) => s.addToWatchlist);
-  const removeFromWatchlist = useChartStore((s) => s.removeFromWatchlist);
-  const openSymbolDialog = useChartStore((s) => s.setSymbolDialogOpen);
+  const setExchange = useChartStore((s) => s.setExchange);
   const setWatchlistOpen = useChartStore((s) => s.setWatchlistOpen);
 
-  const [supported, setSupported] = useState<{ exchange: Exchange; set: Set<string> } | null>(
-    null,
-  );
-  const [collapsed, setCollapsed] = useState(false);
-  /** Edit mode: a delete button on every row (for touch, where there's no hover) */
-  const [editing, setEditing] = useState(false);
-  /** Venue whose symbol list failed to load, and a bump to retry it */
-  const [failedFor, setFailedFor] = useState<Exchange | null>(null);
-  const [retry, setRetry] = useState(0);
+  const list = useWatchlistStore((s) => activeList(s, mode));
+  const allLists = useWatchlistStore((s) => s.lists);
+  const edit = useWatchlistStore((s) => s.edit);
+  const setActive = useWatchlistStore((s) => s.setActive);
+  const createList = useWatchlistStore((s) => s.createList);
+  const renameList = useWatchlistStore((s) => s.renameList);
+  const deleteList = useWatchlistStore((s) => s.deleteList);
 
-  // Only the active market's list is loaded — one venue, not four, on startup.
-  useEffect(() => {
-    let cancelled = false;
-    fetchSupportedSymbols(exchange)
-      .then((set) => {
-        if (!cancelled) setSupported({ exchange, set });
-      })
-      .catch((e) => {
-        console.error(e);
-        if (!cancelled) setFailedFor(exchange);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [exchange, retry]);
+  const modeLists = useMemo(() => listsOf({ lists: allLists }, mode), [allLists, mode]);
+  const symbols = useMemo(() => symbolsOf(list), [list]);
+  const rows = useLiveTickers(symbols);
 
-  const set = supported?.exchange === exchange ? supported.set : null;
-  const symbols = useMemo(
-    () => (set ? watchlist.filter((s) => set.has(s)) : []),
-    [watchlist, set],
-  );
-  const rows = useVenueTickers(exchange, symbols);
-  const isStocks = exchange === "stocks";
-  const inList = watchlist.includes(symbol);
+  const menu = useMenu();
+  const dialogs = useDialogs();
+  const [search, setSearch] = useState<SearchTarget | null>(null);
+  const coarse = useCoarsePointer();
 
-  const select = (s: string) => {
-    setSymbol(s);
+  const chartKey = itemKey(chartExchange, chartSymbol);
+  const lastOnly = modeLists.length <= 1;
+
+  /* ---- actions -------------------------------------------------------- */
+
+  const select = (it: SymbolItem) => {
+    setExchange(it.exchange);
+    setSymbol(it.symbol);
     setWatchlistOpen(false); // close the mobile drawer after picking
   };
 
+  const newList = async () => {
+    const name = await dialogs.prompt("Nueva lista", "", "Crear");
+    if (name) createList(mode, name);
+  };
+  const renameCurrent = async () => {
+    const name = await dialogs.prompt("Renombrar lista", list.name);
+    if (name) renameList(list.id, name);
+  };
+  const deleteCurrent = async () => {
+    const ok = await dialogs.confirm(
+      "Eliminar lista",
+      `Se borrará «${list.name}» con sus secciones. Las demás listas no cambian.`,
+      "Eliminar",
+    );
+    if (ok) deleteList(list.id);
+  };
+  const newSection = async () => {
+    const name = await dialogs.prompt("Nueva sección", "", "Crear");
+    if (name) edit(mode, (l) => void addSection(l, name));
+  };
+  const renameSec = async (sec: SectionItem) => {
+    const name = await dialogs.prompt("Renombrar sección", sec.name);
+    if (name) edit(mode, (l) => renameSection(l, sec.id, name));
+  };
+
+  const listsMenu = (anchor: HTMLElement) =>
+    menu.open(anchor, [
+      ...modeLists.map((l) => ({
+        label: l.name,
+        detail: String(symbolsOf(l).length),
+        checked: l.id === list.id,
+        action: () => setActive(mode, l.id),
+      })),
+      "sep",
+      { label: "Crear lista nueva…", action: newList },
+      { label: "Renombrar lista…", action: renameCurrent },
+      { label: "Añadir sección…", action: newSection },
+      "sep",
+      { label: "Eliminar lista…", danger: true, disabled: lastOnly, action: deleteCurrent },
+    ]);
+
+  const panelMenu = (anchor: HTMLElement) =>
+    menu.open(
+      anchor,
+      [
+        { label: "Añadir sección…", action: newSection },
+        { label: "Renombrar lista…", action: renameCurrent },
+        { label: "Eliminar lista…", danger: true, disabled: lastOnly, action: deleteCurrent },
+        ...(onHide ? (["sep", { label: "Ocultar listas", action: onHide }] as MenuOption[]) : []),
+      ],
+      "right",
+    );
+
+  const sectionMenu = (anchor: HTMLElement, sec: SectionItem) =>
+    menu.open(
+      anchor,
+      [
+        { label: "Renombrar…", action: () => renameSec(sec) },
+        { label: "Añadir símbolo aquí…", action: () => setSearch({ mode: "list", section: sec.id }) },
+        "sep",
+        { label: "Subir", action: () => edit(mode, (l) => moveSection(l, sec.id, -1)) },
+        { label: "Bajar", action: () => edit(mode, (l) => moveSection(l, sec.id, 1)) },
+        "sep",
+        {
+          label: "Quitar sección",
+          detail: "los símbolos se quedan",
+          danger: true,
+          action: () => edit(mode, (l) => removeSection(l, sec.id)),
+        },
+      ],
+      "right",
+    );
+
+  /** Phones: long-press a row for remove / move-to-section. */
+  const rowMenu = (anchor: HTMLElement, it: SymbolItem) => {
+    const key = itemKey(it.exchange, it.symbol);
+    const secs = sectionsOf(list);
+    menu.open(
+      anchor,
+      [
+        { label: "Quitar de la lista", danger: true, action: () => edit(mode, (l) => remove(l, key)) },
+        ...(secs.length
+          ? ([
+              "sep",
+              {
+                label: "Mover a sección…",
+                // Defer so this menu's close doesn't swallow the next one
+                action: () =>
+                  setTimeout(() =>
+                    menu.open(
+                      anchor,
+                      secs.map((sec) => ({
+                        label: sec.name,
+                        action: () => edit(mode, (l) => move(l, key, { section: sec.id })),
+                      })),
+                      "right",
+                    ),
+                  ),
+              },
+            ] as MenuOption[])
+          : []),
+      ],
+      "right",
+    );
+  };
+
+  /* ---- drag and drop (desktop) --------------------------------------- */
+
+  const dragging = useRef<string | null>(null);
+  const [drop, setDrop] = useState<{ id: string; where: "before" | "after" | "into" } | null>(null);
+
+  const dropTarget = (e: React.DragEvent, it: SymbolItem): MoveTarget | null => {
+    const key = itemKey(it.exchange, it.symbol);
+    if (key === dragging.current) return null;
+    const r = e.currentTarget.getBoundingClientRect();
+    return e.clientY < r.top + r.height / 2 ? { before: key } : { after: key };
+  };
+
+  /* ---- render ---------------------------------------------------------- */
+
+  const chartMarket = marketOf(chartExchange, chartSymbol);
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-tv-border px-4">
-        <h2 className="text-[15px] font-semibold text-tv-text">Favoritos</h2>
-        <div className="flex items-center gap-0.5">
-          <button
-            type="button"
-            onClick={() => openSymbolDialog(true)}
-            className="rounded-md p-1.5 text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text"
-            title="Agregar moneda"
-            aria-label="Agregar moneda"
-          >
+    <div className="@container flex h-full min-h-0 flex-col">
+      {/* Head: list switcher + add + more */}
+      <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-tv-border pl-2.5 pr-2">
+        <button
+          type="button"
+          onClick={(e) => listsMenu(e.currentTarget)}
+          title="Cambiar de lista"
+          aria-haspopup="menu"
+          aria-expanded="false"
+          className="group -ml-1 inline-flex h-7 min-w-0 flex-1 items-center gap-1 rounded-md border border-transparent pl-2 pr-1.5 text-[13px] font-semibold text-tv-text hover:border-tv-border hover:bg-tv-panel-hover aria-expanded:border-tv-border aria-expanded:bg-tv-panel-hover"
+        >
+          <span className="truncate">{list.name}</span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-tv-text-muted transition-transform group-aria-expanded:rotate-180" />
+        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <IconButton label="Añadir símbolo" onClick={() => setSearch({ mode: "list" })}>
             <Plus className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setEditing((v) => !v)}
-            aria-pressed={editing}
-            className={cn(
-              "rounded-md p-1.5 hover:bg-tv-panel-hover",
-              editing ? "text-tv-accent" : "text-tv-text-muted hover:text-tv-text",
-            )}
-            title={editing ? "Listo" : "Editar lista"}
-            aria-label={editing ? "Terminar de editar" : "Editar lista"}
-          >
-            {editing ? <Check className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
-          </button>
+          </IconButton>
+          <IconButton label="Más opciones" onClick={(e) => panelMenu(e.currentTarget)}>
+            <EllipsisVertical className="h-4 w-4" />
+          </IconButton>
         </div>
       </div>
 
-      <div className="grid shrink-0 grid-cols-[1fr_auto_4rem] gap-2 px-4 pb-1 pt-2 text-[11px] text-tv-text-muted">
+      {/* Column heads — "Cbo" drops out when the panel is narrow */}
+      <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_4.6rem_3.4rem_3.6rem] items-end gap-1 px-2.5 pb-1 pt-0.5 text-[11px] tracking-wide text-tv-text-muted @max-[330px]:grid-cols-[minmax(0,1fr)_4.6rem_3.6rem]">
         <span>Símbolo</span>
         <span className="text-right">Última</span>
+        <span className="text-right @max-[330px]:hidden">Cbo</span>
         <span className="text-right">Cambio%</span>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="px-1.5 pb-2">
-          <button
-            type="button"
-            onClick={() => setCollapsed((c) => !c)}
-            aria-expanded={!collapsed}
-            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-tv-text-muted hover:text-tv-text"
-          >
-            <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", collapsed && "-rotate-90")} />
-            {isStocks ? "Acciones e índices" : "Cripto"}
-            <span className="ml-auto rounded-full bg-tv-surface px-1.5 text-[10px] font-medium tracking-normal">
-              {set ? symbols.length : "…"}
-            </span>
-          </button>
-
-          {!collapsed && !set && failedFor === exchange && (
-            <div className="flex items-center justify-between gap-2 px-2.5 py-2 text-xs text-tv-yellow">
-              <span>No se pudo cargar este mercado.</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setFailedFor(null);
-                  setRetry((r) => r + 1);
-                }}
-                className="rounded border border-tv-border px-2 py-0.5 text-tv-text hover:bg-tv-panel-hover"
-              >
-                Reintentar
-              </button>
-            </div>
-          )}
-          {!collapsed && !set && failedFor !== exchange && (
-            <div className="px-2.5 py-2 text-xs text-tv-text-dim">Cargando…</div>
-          )}
-          {!collapsed && set && symbols.length === 0 && (
-            <div className="px-2.5 py-2 text-xs text-tv-text-dim">
-              Sin monedas de este mercado. Toca + para agregar.
-            </div>
-          )}
-
-          {!collapsed &&
-            symbols.map((s) => {
-              const row = rows[s];
-              const active = s === symbol;
-              return (
+      <div className="min-h-0 flex-1 overflow-y-auto px-1 [scrollbar-width:thin]">
+        {groups(list).map((g, gi) => {
+          const sec = g.section;
+          return (
+            <div key={sec?.id ?? "top"}>
+              {sec && (
                 <div
-                  key={s}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => select(s)}
-                  onKeyDown={(e) => e.key === "Enter" && select(s)}
+                  onDragOver={(e) => {
+                    if (!dragging.current) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    setDrop({ id: sec.id, where: "into" });
+                  }}
+                  onDragLeave={() => setDrop(null)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const key = dragging.current;
+                    setDrop(null);
+                    dragging.current = null;
+                    if (key) edit(mode, (l) => move(l, key, { section: sec.id }));
+                  }}
                   className={cn(
-                    "group grid h-7 cursor-pointer grid-cols-[1fr_auto_4rem] items-center gap-2 rounded-md border px-2.5 text-[13px] transition-colors",
-                    active
-                      ? "border-tv-border-strong bg-tv-panel-hover"
-                      : "border-transparent hover:bg-tv-panel-hover",
+                    "group/sec relative flex items-center gap-0.5",
+                    gi > 0 && "mt-2 border-t border-tv-border pt-1.5",
                   )}
                 >
-                  <span className="flex min-w-0 items-center gap-2">
-                    <CoinIcon symbol={s} />
-                    <span className="truncate font-medium text-tv-text">
-                      {isStocks ? stockLabel(s) : s}
+                  <button
+                    type="button"
+                    aria-expanded={!sec.collapsed}
+                    title={sec.collapsed ? "Desplegar" : "Plegar"}
+                    onClick={() => edit(mode, (l) => toggleSection(l, sec.id))}
+                    onDoubleClick={(e) => {
+                      e.preventDefault();
+                      renameSec(sec);
+                    }}
+                    className={cn(
+                      "flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text",
+                      drop?.id === sec.id && "bg-[#845cff]/15 text-tv-text",
+                    )}
+                  >
+                    <ChevronDown
+                      className={cn("h-3 w-3 shrink-0 transition-transform", sec.collapsed && "-rotate-90")}
+                    />
+                    <span className="truncate">{sec.name}</span>
+                    <span className="ml-auto rounded-full bg-tv-panel-hover px-1.5 py-px text-[10px] font-medium tracking-normal text-tv-text-dim">
+                      {g.symbols.length}
                     </span>
-                  </span>
-                  <span className="text-right font-mono text-xs tabular-nums text-tv-text">
-                    {row ? formatPriceFor(exchange, s, row.price) : "—"}
-                  </span>
-                  {/* Change %, swapped for a delete button on hover (or in edit mode) */}
-                  <span className="relative flex h-full items-center justify-end">
-                    <span
-                      className={cn(
-                        "font-mono text-xs tabular-nums",
-                        editing ? "hidden" : "group-hover:invisible",
-                        !row ? "text-tv-text-dim" : row.pct >= 0 ? "text-tv-green" : "text-tv-red",
-                      )}
-                    >
-                      {row ? `${row.pct >= 0 ? "+" : ""}${row.pct.toFixed(2)}%` : "—"}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeFromWatchlist(s);
-                      }}
-                      className={cn(
-                        "absolute right-0 rounded-md p-1 text-tv-text-muted hover:bg-tv-red/15 hover:text-tv-red",
-                        editing ? "block" : "hidden group-hover:block",
-                      )}
-                      title="Quitar de favoritos"
-                      aria-label={`Quitar ${s} de favoritos`}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </span>
+                  </button>
+                  <button
+                    type="button"
+                    title={`Opciones de ${sec.name}`}
+                    aria-label={`Opciones de ${sec.name}`}
+                    aria-haspopup="menu"
+                    aria-expanded="false"
+                    onClick={(e) => sectionMenu(e.currentTarget, sec)}
+                    className="grid h-6 w-6 place-items-center rounded text-tv-text-dim opacity-0 transition-opacity hover:bg-tv-panel-hover hover:text-tv-text focus-visible:opacity-100 group-hover/sec:opacity-100 aria-expanded:opacity-100 [@media(hover:none)]:opacity-100"
+                  >
+                    <EllipsisVertical className="h-4 w-4" />
+                  </button>
                 </div>
-              );
-            })}
-        </div>
-      </ScrollArea>
+              )}
+              {!sec?.collapsed &&
+                g.symbols.map((it) => {
+                  const key = itemKey(it.exchange, it.symbol);
+                  return (
+                    <WatchRow
+                      key={key}
+                      item={it}
+                      row={rows[key]}
+                      active={key === chartKey}
+                      draggable={!coarse}
+                      dropMark={drop?.id === key ? drop.where : null}
+                      onSelect={() => select(it)}
+                      onRemove={() => edit(mode, (l) => remove(l, key))}
+                      onLongPress={coarse ? (el) => rowMenu(el, it) : undefined}
+                      onDragStart={(e) => {
+                        dragging.current = key;
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData("text/plain", key);
+                      }}
+                      onDragEnd={() => {
+                        dragging.current = null;
+                        setDrop(null);
+                      }}
+                      onDragOver={(e) => {
+                        if (!dragging.current) return;
+                        const t = dropTarget(e, it);
+                        if (!t) return setDrop(null);
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                        setDrop({ id: key, where: "before" in t ? "before" : "after" });
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const from = dragging.current;
+                        const t = dropTarget(e, it);
+                        setDrop(null);
+                        dragging.current = null;
+                        if (from && t) edit(mode, (l) => move(l, from, t));
+                      }}
+                    />
+                  );
+                })}
+            </div>
+          );
+        })}
 
-      {/* Current symbol, with quick search / add */}
-      <div className="flex h-11 shrink-0 items-center gap-2 border-t border-tv-border px-4">
-        <CoinIcon symbol={symbol} />
-        <span className="flex-1 truncate text-[13px] font-semibold text-tv-text">
-          {isStocks ? stockLabel(symbol) : symbol}
-        </span>
-        <button
-          type="button"
-          onClick={() => openSymbolDialog(true)}
-          className="rounded-md p-1.5 text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text"
-          title="Buscar moneda"
-          aria-label="Buscar moneda"
-        >
-          <Search className="h-4 w-4" />
-        </button>
-        {!inList && (
-          <button
-            type="button"
-            onClick={() => addToWatchlist(symbol)}
-            className="rounded-md p-1.5 text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text"
-            title="Agregar a favoritos"
-            aria-label="Agregar a favoritos"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
+        {symbols.length === 0 && (
+          <div className="flex flex-col items-center gap-2.5 px-3 py-7 text-center text-xs text-tv-text-muted">
+            <p>Esta lista está vacía.</p>
+            <button
+              type="button"
+              onClick={() => setSearch({ mode: "list" })}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-tv-border bg-tv-bg px-3 text-xs text-tv-text hover:bg-tv-panel-hover"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Añadir símbolo
+            </button>
+          </div>
         )}
       </div>
+
+      {/* Foot: the symbol on the chart + quick actions */}
+      <div className="flex min-h-10 shrink-0 items-center gap-2 border-t border-tv-border bg-tv-bg/60 px-2">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          <Avatar market={chartMarket} />
+          <span className="truncate text-xs font-semibold tracking-tight">{labelOf(chartMarket)}</span>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <IconButton label="Buscar símbolo" onClick={() => setSearch({ mode: "chart" })}>
+            <Search className="h-[15px] w-[15px]" />
+          </IconButton>
+          <IconButton label="Añadir a la lista" onClick={() => setSearch({ mode: "list" })}>
+            <Plus className="h-[15px] w-[15px]" />
+          </IconButton>
+          <IconButton label="Más opciones" onClick={(e) => panelMenu(e.currentTarget)}>
+            <EllipsisVertical className="h-[15px] w-[15px]" />
+          </IconButton>
+        </div>
+      </div>
+
       <a
         href="https://www.tradingview.com/"
         target="_blank"
         rel="noopener noreferrer"
-        className="shrink-0 px-4 pb-2 text-[10px] text-tv-text-dim hover:text-tv-text-muted"
+        className="shrink-0 px-3 pb-1.5 text-[10px] text-tv-text-dim hover:text-tv-text-muted"
       >
         Gráficos con Lightweight Charts™ de TradingView
       </a>
+
+      {menu.element}
+      {dialogs.element}
+      {search && <WatchlistSearch target={search} onClose={() => setSearch(null)} />}
     </div>
+  );
+}
+
+function IconButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+      className="grid h-7 w-7 place-items-center rounded-md border border-transparent text-tv-text-muted transition-colors hover:border-tv-border hover:bg-tv-panel-hover hover:text-tv-text"
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Official logo (coins and shares), with the app's own fallback. */
+function Avatar({ market }: { market: Market }) {
+  return <CoinIcon symbol={market.symbol} />;
+}
+
+const DIR_TEXT = { up: "text-tv-green", down: "text-tv-red", flat: "text-tv-text-muted" } as const;
+
+function WatchRow({
+  item,
+  row,
+  active,
+  draggable,
+  dropMark,
+  onSelect,
+  onRemove,
+  onLongPress,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
+}: {
+  item: SymbolItem;
+  row: TickerRow | undefined;
+  active: boolean;
+  draggable: boolean;
+  dropMark: "before" | "after" | "into" | null;
+  onSelect: () => void;
+  onRemove: () => void;
+  onLongPress?: (el: HTMLElement) => void;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+  onDragOver: (e: React.DragEvent) => void;
+  onDrop: (e: React.DragEvent) => void;
+}) {
+  const market = marketOf(item.exchange, item.symbol);
+  const dir = directionOf(row);
+  const [dragged, setDragged] = useState(false);
+
+  // Long press (500 ms, cancelled by moving the finger) opens the row menu and
+  // swallows the click that follows.
+  const press = useRef<{ timer: number; x: number; y: number } | null>(null);
+  const swallowClick = useRef(false);
+  const cancelPress = () => {
+    if (press.current) window.clearTimeout(press.current.timer);
+    press.current = null;
+  };
+
+  return (
+    <div
+      draggable={draggable}
+      onClick={() => {
+        if (swallowClick.current) {
+          swallowClick.current = false;
+          return;
+        }
+        onSelect();
+      }}
+      onDragStart={(e) => {
+        setDragged(true);
+        onDragStart(e);
+      }}
+      onDragEnd={() => {
+        setDragged(false);
+        onDragEnd();
+      }}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onPointerDown={(e) => {
+        if (!onLongPress || (e.target as HTMLElement).closest("button")) return;
+        const el = e.currentTarget;
+        press.current = {
+          x: e.clientX,
+          y: e.clientY,
+          timer: window.setTimeout(() => {
+            press.current = null;
+            swallowClick.current = true;
+            onLongPress(el);
+          }, 500),
+        };
+      }}
+      onPointerMove={(e) => {
+        if (press.current && Math.hypot(e.clientX - press.current.x, e.clientY - press.current.y) > 8) {
+          cancelPress();
+        }
+      }}
+      onPointerUp={cancelPress}
+      onPointerCancel={cancelPress}
+      onContextMenu={(e) => {
+        if (onLongPress) e.preventDefault(); // Android's own long-press menu
+      }}
+      className={cn(
+        "group/row relative grid min-h-8 cursor-pointer select-none grid-cols-[minmax(0,1fr)_4.6rem_3.4rem_3.6rem] items-center gap-1 rounded border border-transparent px-1.5 transition-colors @max-[330px]:grid-cols-[minmax(0,1fr)_4.6rem_3.6rem]",
+        "hover:bg-tv-panel-hover",
+        active && "border-tv-border bg-tv-panel-hover shadow-[inset_0_0_0_1px_var(--color-tv-border)]",
+        dragged && "opacity-40",
+        dropMark === "before" && "shadow-[inset_0_2px_0_var(--color-tv-blue)]",
+        dropMark === "after" && "shadow-[inset_0_-2px_0_var(--color-tv-blue)]",
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-1.5">
+        <Avatar market={market} />
+        <span className="truncate text-xs font-medium tracking-tight">{labelOf(market)}</span>
+        {VENUE_TAG[item.exchange] && (
+          <span className="shrink-0 text-[8px] font-semibold tracking-wide text-tv-text-dim">
+            {VENUE_TAG[item.exchange]}
+          </span>
+        )}
+      </div>
+      <FlashPrice text={formatWlPrice(row?.price)} dir={dir} />
+      <span className={cn("text-right font-mono text-[11px] font-medium tabular-nums @max-[330px]:hidden", DIR_TEXT[dir])}>
+        {formatWlChange(row?.chg)}
+      </span>
+      <span className={cn("text-right font-mono text-[11px] font-medium tabular-nums", DIR_TEXT[dir])}>
+        {formatWlPct(row?.pct)}
+      </span>
+      <button
+        type="button"
+        title={`Quitar ${market.ticker} de la lista`}
+        aria-label={`Quitar ${market.ticker} de la lista`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        className="absolute right-0.5 top-1/2 hidden h-6 w-6 -translate-y-1/2 place-items-center rounded bg-tv-panel text-tv-text-muted shadow hover:text-tv-red group-hover/row:grid [@media(hover:none)]:!hidden"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Price that flashes only the digits that changed, green on the way up and
+ * red on the way down, for 420 ms — the way CdeCripto's watchlist ticks.
+ */
+function FlashPrice({ text, dir }: { text: string; dir: "up" | "down" | "flat" }) {
+  const [prev, setPrev] = useState(text);
+  const [flash, setFlash] = useState<{ base: string; tail: string; dir: typeof dir } | null>(null);
+
+  // Compare during render (not in an effect) so the flash lands in the same paint.
+  if (text !== prev) {
+    setPrev(text);
+    if (prev !== "—" && text !== "—") {
+      let i = 0;
+      while (i < prev.length && i < text.length && prev[i] === text[i]) i++;
+      setFlash({ base: text.slice(0, i), tail: text.slice(i), dir });
+    }
+  }
+
+  useEffect(() => {
+    if (!flash) return;
+    const id = window.setTimeout(() => setFlash(null), 420);
+    return () => window.clearTimeout(id);
+  }, [flash]);
+
+  const live = flash && flash.base + flash.tail === text ? flash : null;
+  return (
+    <span className="text-right font-mono text-[11px] font-medium tabular-nums text-tv-text">
+      {live ? (
+        <>
+          {live.base}
+          <span className={live.dir === "up" ? "text-tv-green" : live.dir === "down" ? "text-tv-red" : undefined}>
+            {live.tail}
+          </span>
+        </>
+      ) : (
+        text
+      )}
+    </span>
   );
 }
