@@ -354,6 +354,10 @@ export const POPULAR_SYMBOLS = [
 interface ChartState {
   symbol: string;
   exchange: Exchange;
+  /** VWAP or NORMAL view — each keeps its own timeframe and indicators */
+  mode: ChartMode;
+  /** The inactive mode's saved settings, restored when switching back */
+  modeSettings: Partial<Record<ChartMode, ModeSettings>>;
   timeframe: Timeframe;
   /** Indicator is added to the chart (appears in pill + renders unless hidden) */
   indicators: Record<IndicatorKey, boolean>;
@@ -383,6 +387,8 @@ interface ChartState {
   setSymbol: (s: string) => void;
   setExchange: (e: Exchange) => void;
   setTimeframe: (t: Timeframe) => void;
+  /** Switch VWAP ⇄ NORMAL: park this mode's settings, restore the other's */
+  setMode: (m: ChartMode) => void;
   toggleIndicator: (key: IndicatorKey) => void;
   removeIndicator: (key: IndicatorKey) => void;
   toggleHidden: (key: IndicatorKey) => void;
@@ -418,11 +424,80 @@ interface ChartState {
   setVisibleRangeDays: (d: number | "all") => void;
 }
 
+export type ChartMode = "vwap" | "normal";
+
+/** What each mode remembers on its own. The symbol is shared by both. */
+export interface ModeSettings {
+  timeframe: Timeframe;
+  indicators: Record<IndicatorKey, boolean>;
+  hidden: Record<IndicatorKey, boolean>;
+  config: IndicatorConfig;
+}
+
+export const CHART_MODES: { key: ChartMode; label: string }[] = [
+  { key: "vwap", label: "VWAP" },
+  { key: "normal", label: "NORMAL" },
+];
+
+const freshConfig = (): IndicatorConfig => ({
+  ...DEFAULT_CONFIG,
+  ribbonLines: DEFAULT_RIBBON_LINES.map((l) => ({ ...l })),
+  vwapBandLines: DEFAULT_VWAP_BANDS.map((b) => ({ ...b })),
+});
+
+const noIndicators = (): Record<IndicatorKey, boolean> => ({
+  ema20: false,
+  ema50: false,
+  ema200: false,
+  rsi: false,
+  macd: false,
+  volume: false,
+  bb: false,
+  stoch: false,
+  supertrend: false,
+  vwap: false,
+  wavetrend: false,
+  ribbon: false,
+  ichimoku: false,
+  session: false,
+  stochrsi: false,
+  cipher: false,
+});
+
+/**
+ * First-run settings of each mode, as CdeCripto ships them: VWAP is the VWAP +
+ * bands setup with RSI and stochastic below; NORMAL is the moving averages with
+ * the Cipher WaveTrend pane.
+ */
+export function defaultModeSettings(mode: ChartMode): ModeSettings {
+  const indicators = noIndicators();
+  if (mode === "vwap") {
+    Object.assign(indicators, {
+      rsi: true,
+      volume: true,
+      stoch: true,
+      vwap: true,
+      ribbon: true,
+      session: true,
+    });
+  } else {
+    Object.assign(indicators, { volume: true, ribbon: true, cipher: true });
+  }
+  return {
+    timeframe: "15m",
+    indicators,
+    hidden: noIndicators(),
+    config: freshConfig(),
+  };
+}
+
 export const useChartStore = create<ChartState>()(
   persist(
     (set) => ({
       symbol: "BTCUSDT",
       exchange: "binance" as Exchange,
+      mode: "vwap" as ChartMode,
+      modeSettings: {},
       timeframe: "15m" as Timeframe,
       indicators: {
         ema20: false,
@@ -479,6 +554,25 @@ export const useChartStore = create<ChartState>()(
       setSymbol: (symbol) => set({ symbol }),
       setExchange: (exchange) => set({ exchange }),
       setTimeframe: (timeframe) => set({ timeframe }),
+      setMode: (mode) =>
+        set((s) => {
+          if (mode === s.mode) return {};
+          const parked: ModeSettings = {
+            timeframe: s.timeframe,
+            indicators: s.indicators,
+            hidden: s.hidden,
+            config: s.config,
+          };
+          const next = s.modeSettings[mode] ?? defaultModeSettings(mode);
+          return {
+            mode,
+            modeSettings: { ...s.modeSettings, [s.mode]: parked, [mode]: undefined },
+            ...next,
+            // Pane blow-ups and open dialogs belong to the view being left
+            maximizedPane: null,
+            settingsTarget: null,
+          };
+        }),
       toggleIndicator: (key) =>
         set((s) => ({
           indicators: { ...s.indicators, [key]: !s.indicators[key] },
@@ -759,6 +853,8 @@ export const useChartStore = create<ChartState>()(
       partialize: (s) => ({
         symbol: s.symbol,
         exchange: s.exchange,
+        mode: s.mode,
+        modeSettings: s.modeSettings,
         timeframe: s.timeframe,
         indicators: s.indicators,
         hidden: s.hidden,
@@ -807,9 +903,26 @@ export const useChartStore = create<ChartState>()(
           (s) => !DEFAULT_WATCHLIST.includes(s) && !PURGE.has(s),
         );
 
+        // The parked mode may predate indicators or options added since:
+        // fill the gaps from that mode's defaults.
+        const modeSettings: ChartState["modeSettings"] = {};
+        for (const { key } of CHART_MODES) {
+          const saved = p.modeSettings?.[key];
+          if (!saved) continue;
+          const base = defaultModeSettings(key);
+          modeSettings[key] = {
+            timeframe: saved.timeframe ?? base.timeframe,
+            indicators: { ...base.indicators, ...saved.indicators },
+            hidden: { ...base.hidden, ...saved.hidden },
+            config: { ...base.config, ...saved.config },
+          };
+        }
+
         return {
           ...current,
           ...p,
+          mode: p.mode === "normal" ? "normal" : "vwap",
+          modeSettings,
           exchange: p.exchange ?? "binance",
           indicators: { ...current.indicators, ...p.indicators },
           hidden: { ...current.hidden, ...p.hidden },

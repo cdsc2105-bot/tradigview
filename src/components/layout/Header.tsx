@@ -5,10 +5,13 @@ import { SymbolSelector } from "@/components/chart/SymbolSelector";
 import { TimeframeSelector } from "@/components/chart/TimeframeSelector";
 import { IndicatorMenu } from "@/components/chart/IndicatorMenu";
 import { Separator } from "@/components/ui/separator";
-import { useChartStore } from "@/lib/store/chart-store";
+import { CHART_MODES, useChartStore } from "@/lib/store/chart-store";
+import { cn } from "@/lib/utils";
 
 export function Header() {
   const setWatchlistOpen = useChartStore((s) => s.setWatchlistOpen);
+  const mode = useChartStore((s) => s.mode);
+  const setMode = useChartStore((s) => s.setMode);
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-1 border-b border-tv-border bg-tv-panel px-2 md:px-3">
@@ -26,6 +29,29 @@ export function Header() {
 
       {/* Controls — scroll horizontally on small screens instead of wrapping */}
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-none">
+        {/* VWAP / NORMAL — each view keeps its own timeframe and indicators */}
+        <nav
+          aria-label="Secciones principales"
+          className="flex shrink-0 items-center rounded-md bg-tv-bg p-0.5"
+        >
+          {CHART_MODES.map((m) => (
+            <button
+              key={m.key}
+              type="button"
+              onClick={() => setMode(m.key)}
+              aria-current={mode === m.key ? "page" : undefined}
+              className={cn(
+                "rounded px-2.5 py-1 text-[11px] font-semibold tracking-wide transition-colors",
+                mode === m.key
+                  ? "bg-tv-blue text-white"
+                  : "text-tv-text-muted hover:text-tv-text",
+              )}
+            >
+              {m.label}
+            </button>
+          ))}
+        </nav>
+        <Separator orientation="vertical" className="h-6 shrink-0 bg-tv-border" />
         <SymbolSelector />
         <Separator orientation="vertical" className="h-6 shrink-0 bg-tv-border" />
         <TimeframeSelector />
