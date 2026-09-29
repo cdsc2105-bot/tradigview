@@ -85,7 +85,7 @@ import { cn } from "@/lib/utils";
 import { IndicatorPill } from "./IndicatorPill";
 import { timeframeLabel } from "./TimeframeSelector";
 import { MeasureOverlay } from "./MeasureOverlay";
-import { DrawingToolbar, type DrawingSelection } from "./DrawingToolbar";
+import { DRAWING_COLORS, DrawingToolbar, type DrawingSelection } from "./DrawingToolbar";
 
 interface MeasurePoint {
   time: number;
@@ -646,6 +646,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       wickDownColor: CANDLE_COLORS.down,
       priceLineColor: "#8a93a6",
       priceLineStyle: 2,
+      // Drawn by us instead, with the candle countdown under the price
+      lastValueVisible: false,
     });
 
     ema20Ref.current = chart.addSeries(LineSeries, {
@@ -697,8 +699,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       }
 
       if (toolRef.current === "measure") {
-        if (!param.time) return;
-        const time = Number(param.time);
+        // Anywhere on the pane, including the empty space right of the last bar
+        const at = pointAt(param.point.x, param.point.y);
+        if (!at) return;
+        const { time, price } = at;
         const current = measureRef.current;
         if (current.phase === "idle") {
           setMeasure({
@@ -728,17 +732,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       if (
         toolRef.current === "measure" &&
         measureRef.current.phase === "placing" &&
-        param.point &&
-        param.time &&
-        candleSeriesRef.current
+        param.point
       ) {
-        const price = candleSeriesRef.current.coordinateToPrice(param.point.y);
-        if (price !== null && isFinite(price)) {
-          const time = Number(param.time);
-          setMeasure((prev) =>
-            prev.phase === "placing" ? { ...prev, b: { time, price } } : prev,
-          );
-        }
+        const at = pointAt(param.point.x, param.point.y);
+        if (at) setMeasure((prev) => (prev.phase === "placing" ? { ...prev, b: at } : prev));
       }
 
       // Shape preview follows the crosshair between the two clicks
@@ -2996,6 +2993,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     const ts = chartRef.current?.timeScale();
     if (!ts || n === 0) return;
     ts.setVisibleLogicalRange({ from: Math.max(0, n - 180), to: n + 8 });
+    // Dragging a price axis turns its auto-fit off, and it would stay locked
+    // on the old symbol's range (BTC's 80 000s with AVAX at 10). A new chart
+    // always starts fitted to its own prices.
+    chartRef.current?.panes().forEach((pane) =>
+      pane.getSeries().forEach((s) => s.priceScale().applyOptions({ autoScale: true })),
+    );
   }
 
   /** Empty every series and readout — used when switching to uncached data. */
@@ -3463,13 +3466,15 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     chartRef.current &&
     candleSeriesRef.current
   ) {
-    const ts = chartRef.current.timeScale();
-    const aX = ts.timeToCoordinate(measure.a.time as UTCTimestamp);
-    const bX = ts.timeToCoordinate(measure.b.time as UTCTimestamp);
-    const aY = candleSeriesRef.current.priceToCoordinate(measure.a.price);
-    const bY = candleSeriesRef.current.priceToCoordinate(measure.b.price);
+    // Projected like the drawings, so the ruler also reaches past the last bar
+    const pa = project(measure.a.time, measure.a.price);
+    const pb = project(measure.b.time, measure.b.price);
+    const la = timeToLogical(measure.a.time);
+    const lb = timeToLogical(measure.b.time);
 
-    if (aX !== null && bX !== null && aY !== null && bY !== null) {
+    if (pa && pb && la !== null && lb !== null) {
+      const { x: aX, y: aY } = pa;
+      const { x: bX, y: bY } = pb;
       const priceDiff = measure.b.price - measure.a.price;
       const pctChange =
         measure.a.price === 0 ? 0 : (priceDiff / measure.a.price) * 100;
@@ -3479,7 +3484,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       const inRange = candlesRef.current.filter(
         (c) => c.time >= start && c.time <= end,
       );
-      const bars = inRange.length;
+      const bars = Math.round(Math.abs(lb - la));
       const volume = inRange.reduce((s, c) => s + c.volume, 0);
       const dur = durationLabel(measure.a.time, measure.b.time);
 
@@ -3523,11 +3528,78 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     lastPrice && candleSeriesRef.current
       ? candleSeriesRef.current.priceToCoordinate(lastPrice.value)
       : null;
+  const axisWidth = chartRef.current?.priceScale("right").width() ?? 0;
+  const mainPaneHeight = chartRef.current?.panes()[0]?.getHeight() ?? 0;
+  const showCountdown = countdown !== null && countdown > 0;
+  const priceLabelHeight = showCountdown ? 32 : 17;
+  const priceLabelTop =
+    countdownY === null
+      ? null
+      : Math.max(0, Math.min(countdownY - 8.5, mainPaneHeight - priceLabelHeight));
+
+  // The price and time of the ruler, the drawing being placed or the
+  // selected one, marked on the axes (like the crosshair's labels) so the
+  // exact levels can be read off.
+  const axisMarks: { time: number; price?: number; color: string }[] = [];
+  if (measure.a && measure.b) {
+    const color = measure.b.price >= measure.a.price ? "#26a69a" : "#ef5350";
+    axisMarks.push({ ...measure.a, color }, { ...measure.b, color });
+  }
+  if (trendDraft.phase === "placing" && trendDraft.a && trendDraft.b && isShapeTool(tool)) {
+    const color = DRAWING_COLORS[0];
+    axisMarks.push({ ...trendDraft.a, color });
+    if (tool !== "text") axisMarks.push({ ...trendDraft.b, color });
+  }
+  if (selected?.kind === "shape") {
+    const t = trendLines.find((l) => l.id === selected.id);
+    if (t) {
+      const color = t.color ?? DRAWING_COLORS[0];
+      axisMarks.push({ time: t.t1, price: t.p1, color });
+      if (t.kind !== "text") axisMarks.push({ time: t.t2, price: t.p2, color });
+    }
+  }
+  const timeAxisTop =
+    (containerRef.current?.clientHeight ?? 0) - (chartRef.current?.timeScale().height() ?? 0);
+  const plotWidth = (containerRef.current?.clientWidth ?? 0) - axisWidth;
+  const axisMarkNodes = axisMarks.flatMap((m, i) => {
+    const pt = project(m.time, m.price ?? 0);
+    const nodes: React.ReactNode[] = [];
+    if (m.price !== undefined && pt && pt.y >= 0 && pt.y <= mainPaneHeight) {
+      nodes.push(
+        <div
+          key={`p${i}`}
+          style={{ top: Math.min(pt.y - 8.5, mainPaneHeight - 17), width: axisWidth, backgroundColor: m.color }}
+          className="pointer-events-none absolute right-0 z-20 h-[17px] rounded-l-sm pl-[7px] font-sans text-[11px] leading-[17px] tabular-nums text-white"
+        >
+          {m.price.toFixed(Math.max(0, pricePrecisionRef.current))}
+        </div>,
+      );
+    }
+    if (pt && pt.x >= 0 && pt.x <= plotWidth && timeAxisTop > 0) {
+      nodes.push(
+        <div
+          key={`t${i}`}
+          style={{ top: timeAxisTop + 2, left: Math.max(40, Math.min(pt.x, plotWidth - 40)), backgroundColor: m.color }}
+          className="pointer-events-none absolute z-20 -translate-x-1/2 whitespace-nowrap rounded-sm px-1.5 font-sans text-[11px] leading-[18px] tabular-nums text-white"
+        >
+          {new Date(m.time * 1000).toLocaleString(undefined, {
+            day: "numeric",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+          })}
+        </div>,
+      );
+    }
+    return nodes;
+  });
 
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
       {measureRender}
+      {axisMarkNodes}
 
       {selected && tool === "cursor" && !drawingsHidden && (
         <DrawingToolbar selection={selected} onSelect={setSelected} />
@@ -3603,15 +3675,15 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         </div>
       )}
 
-      {/* Candle-close countdown, pinned to the price axis under the last price */}
-      {countdownY !== null && countdown !== null && countdown > 0 && (
+      {/* Last price on the axis, with the candle-close countdown inside the
+          same label (never covering the price) */}
+      {priceLabelTop !== null && lastPrice && axisWidth > 0 && (
         <div
-          style={{ top: countdownY + 9 }}
-          className={cn(
-            "pointer-events-none absolute right-1 z-20 rounded-sm bg-[#8a93a6] px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-white",
-          )}
+          style={{ top: priceLabelTop, width: axisWidth, height: priceLabelHeight }}
+          className="pointer-events-none absolute right-0 z-20 flex flex-col justify-center rounded-l-sm bg-[#8a93a6] pl-[7px] font-sans text-[11px] leading-[15px] tabular-nums text-white"
         >
-          {countdownLabel(countdown)}
+          <span>{lastPrice.value.toFixed(Math.max(0, pricePrecisionRef.current))}</span>
+          {showCountdown && <span className="text-white/85">{countdownLabel(countdown)}</span>}
         </div>
       )}
 
