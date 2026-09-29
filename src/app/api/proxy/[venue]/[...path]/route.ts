@@ -19,15 +19,24 @@ const VENUES: Record<string, { hosts: string[]; paths: RegExp }> = {
   },
   bitget: {
     hosts: ["https://api.bitget.com"],
-    paths: /^\/api\/v2\/mix\/market\/(candles|history-candles|tickers|ticker|contracts)$/,
+    paths:
+      /^\/api\/v2\/(mix\/market\/(candles|history-candles|tickers|ticker|contracts)|spot\/market\/(candles|history-candles|tickers)|spot\/public\/symbols)$/,
+  },
+  bitunixf: {
+    hosts: ["https://fapi.bitunix.com"],
+    paths: /^\/api\/v1\/futures\/market\/(kline|tickers|trading_pairs)$/,
+  },
+  bitunix: {
+    hosts: ["https://openapi.bitunix.com"],
+    paths: /^\/api\/spot\/v1\/(market\/(kline\/history|last_price)|common\/coin_pair\/list)$/,
   },
 };
 
 /** CDN cache per endpoint: symbol lists barely change, prices do. */
 function cacheControl(path: string, query: URLSearchParams): string {
-  if (/exchangeInfo|contracts/.test(path)) return "public, s-maxage=3600, stale-while-revalidate=86400";
+  if (/exchangeInfo|contracts|symbols$|trading_pairs|coin_pair/.test(path)) return "public, s-maxage=3600, stale-while-revalidate=86400";
   // Closed history (paged with endTime) never changes
-  if (query.has("endTime")) return "public, s-maxage=86400";
+  if (query.has("endTime") && Number(query.get("endTime")) < Date.now() - 60_000) return "public, s-maxage=86400";
   return "public, s-maxage=1, stale-while-revalidate=2";
 }
 

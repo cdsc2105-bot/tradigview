@@ -1,5 +1,7 @@
 import { fetchExchangeSymbols } from "@/lib/binance/rest";
 import { fetchBitgetSymbols } from "@/lib/exchanges/bitget";
+import { fetchBitgetSpotSymbols } from "@/lib/exchanges/bitget-spot";
+import { fetchBitunixFuturesSymbols, fetchBitunixSpotSymbols } from "@/lib/exchanges/bitunix";
 import { fetchFuturesSymbols } from "@/lib/exchanges/binance-futures";
 import { STOCK_SYMBOLS } from "@/lib/exchanges/stocks";
 import type { Exchange } from "@/lib/store/chart-store";
@@ -12,6 +14,16 @@ import type { Exchange } from "@/lib/store/chart-store";
  * request with a 400 if any symbol in it is unknown. So every place that
  * fetches by symbol must filter against these sets first.
  */
+const LISTS: Record<Exchange, () => Promise<string[]> | string[]> = {
+  binance: async () => (await fetchExchangeSymbols()).map((s) => s.symbol),
+  binancef: fetchFuturesSymbols,
+  bitgetspot: fetchBitgetSpotSymbols,
+  bitget: fetchBitgetSymbols,
+  bitunix: fetchBitunixSpotSymbols,
+  bitunixf: fetchBitunixFuturesSymbols,
+  stocks: () => STOCK_SYMBOLS,
+};
+
 const cache: Partial<Record<Exchange, Promise<Set<string>>>> = {};
 
 /**
@@ -23,14 +35,7 @@ export function fetchSupportedSymbols(exchange: Exchange): Promise<Set<string>> 
   if (cached) return cached;
 
   const load = async () => {
-    const symbols =
-      exchange === "binance"
-        ? (await fetchExchangeSymbols()).map((s) => s.symbol)
-        : exchange === "binancef"
-          ? await fetchFuturesSymbols()
-          : exchange === "stocks"
-            ? STOCK_SYMBOLS
-            : await fetchBitgetSymbols();
+    const symbols = await LISTS[exchange]();
     return new Set(symbols.map((s) => s.toUpperCase()));
   };
 

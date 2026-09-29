@@ -3,11 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { CoinIcon } from "@/components/brand/CoinIcon";
-import { fetchTickers24h } from "@/lib/binance/rest";
-import { fetchBitgetTickers } from "@/lib/exchanges/bitget";
-import { fetchFuturesTickers } from "@/lib/exchanges/binance-futures";
 import { getBitgetWS } from "@/lib/exchanges/bitget-ws";
-import { fetchStockTickers, stockLabel } from "@/lib/exchanges/stocks";
+import { stockLabel } from "@/lib/exchanges/stocks";
+import { TICKER_FETCHERS } from "@/lib/exchanges/venues";
 import { fetchSupportedSymbols } from "@/lib/exchanges/symbols";
 import { getBinanceWS, getBinanceFuturesWS } from "@/lib/binance/ws";
 import { useChartStore, type Exchange } from "@/lib/store/chart-store";
@@ -73,10 +71,10 @@ function useVenueTickers(exchange: Exchange, symbols: string[]): RowMap {
     };
 
     let stop: () => void = () => {};
+    const fetchSnapshot = TICKER_FETCHERS[exchange];
+    const load = () => void fetchSnapshot(symbols).then(snapshot).catch(console.error);
+    load();
     if (exchange === "binance" || exchange === "binancef") {
-      const fetcher = exchange === "binance" ? fetchTickers24h : fetchFuturesTickers;
-      const load = () => void fetcher(symbols).then(snapshot).catch(console.error);
-      load();
       const ws = exchange === "binance" ? getBinanceWS() : getBinanceFuturesWS();
       const unsub = ws.subscribeMiniTickers(symbols, (t) => {
         lastTick = Date.now();
@@ -87,23 +85,25 @@ function useVenueTickers(exchange: Exchange, symbols: string[]): RowMap {
         unsub();
         stopPoll();
       };
-    } else if (exchange === "bitget") {
-      const load = () => void fetchBitgetTickers(symbols).then(snapshot).catch(console.error);
-      load();
-      const unsub = getBitgetWS().subscribeTickers(symbols, (t) => {
-        lastTick = Date.now();
-        push(t.symbol, { price: t.lastPrice, pct: t.priceChangePercent });
-      });
+    } else if (exchange === "bitget" || exchange === "bitgetspot") {
+      const unsub = getBitgetWS().subscribeTickers(
+        symbols,
+        (t) => {
+          lastTick = Date.now();
+          push(t.symbol, { price: t.lastPrice, pct: t.priceChangePercent });
+        },
+        exchange === "bitget" ? "USDT-FUTURES" : "SPOT",
+      );
       const stopPoll = pollIfSilent(load);
       stop = () => {
         unsub();
         stopPoll();
       };
     } else {
-      // Stocks: no free stream — poll; Yahoo is rate-limited, 5s is plenty.
-      const load = () => fetchStockTickers(symbols).then(snapshot).catch(console.error);
-      void load();
-      const id = setInterval(load, 5_000);
+      // Stocks and Bitunix: no stream the browser can use — poll every 5s.
+      const id = setInterval(() => {
+        if (!document.hidden) load();
+      }, 5_000);
       stop = () => clearInterval(id);
     }
 

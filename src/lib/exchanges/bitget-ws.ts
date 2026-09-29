@@ -1,7 +1,12 @@
 import type { Ticker24h } from "@/lib/binance/types";
 
 const BITGET_WS = "wss://ws.bitget.com/v2/ws/public";
-const INST_TYPE = "USDT-FUTURES";
+
+/** Bitget product lines on the public socket: USDT perpetuals and spot. */
+export type BitgetInstType = "USDT-FUTURES" | "SPOT";
+
+/** Handlers are keyed per product line — BTCUSDT spot ≠ BTCUSDT perpetual. */
+const key = (instType: BitgetInstType, instId: string) => `${instType}:${instId}`;
 
 interface TickerData {
   instId: string;
@@ -17,7 +22,7 @@ interface TickerData {
 type TickerHandler = (t: Ticker24h) => void;
 
 /**
- * Real-time Bitget public WebSocket (v2) for futures tickers.
+ * Real-time Bitget public WebSocket (v2) for futures and spot tickers.
  *
  * Bitget has no REST batch push, so the watchlist used to poll. This streams
  * ticker updates instead — sub-second, only pushing when the market actually
@@ -31,7 +36,7 @@ export class BitgetWS {
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
-  /** instId → handlers */
+  /** "instType:instId" → handlers */
   private handlers = new Map<string, Set<TickerHandler>>();
 
   /** Last time anything (ticks or the pong to our ping) arrived */
@@ -90,8 +95,8 @@ export class BitgetWS {
       this.connected = true;
       this.reconnectAttempts = 0;
       // (re)subscribe everything we care about
-      const symbols = [...this.handlers.keys()];
-      if (symbols.length > 0) this.sendSubscribe(symbols);
+      const keys = [...this.handlers.keys()];
+      if (keys.length > 0) this.sendSubscribe(keys);
       // keepalive
       this.pingTimer = setInterval(() => {
         if (this.ws && this.connected) this.ws.send("ping");
@@ -109,11 +114,12 @@ export class BitgetWS {
       }
       const m = msg as {
         action?: string;
-        arg?: { channel?: string; instId?: string };
+        arg?: { channel?: string; instId?: string; instType?: BitgetInstType };
         data?: TickerData[];
       };
       if (m.arg?.channel === "ticker" && Array.isArray(m.data)) {
-        for (const d of m.data) this.dispatch(d);
+        const instType = m.arg.instType ?? "USDT-FUTURES";
+        for (const d of m.data) this.dispatch(instType, d);
       }
     };
 
@@ -140,35 +146,25 @@ export class BitgetWS {
     }, delay);
   }
 
-  private sendSubscribe(symbols: string[]) {
-    this.ws?.send(
-      JSON.stringify({
-        op: "subscribe",
-        args: symbols.map((instId) => ({
-          instType: INST_TYPE,
-          channel: "ticker",
-          instId,
-        })),
-      }),
-    );
+  /** Subscribe message args from handler keys ("instType:instId"). */
+  private argsOf(keys: string[]) {
+    return keys.map((k) => {
+      const [instType, instId] = k.split(":");
+      return { instType, channel: "ticker", instId };
+    });
   }
 
-  private sendUnsubscribe(symbols: string[]) {
+  private sendSubscribe(keys: string[]) {
+    this.ws?.send(JSON.stringify({ op: "subscribe", args: this.argsOf(keys) }));
+  }
+
+  private sendUnsubscribe(keys: string[]) {
     if (!this.connected) return;
-    this.ws?.send(
-      JSON.stringify({
-        op: "unsubscribe",
-        args: symbols.map((instId) => ({
-          instType: INST_TYPE,
-          channel: "ticker",
-          instId,
-        })),
-      }),
-    );
+    this.ws?.send(JSON.stringify({ op: "unsubscribe", args: this.argsOf(keys) }));
   }
 
-  private dispatch(d: TickerData) {
-    const set = this.handlers.get(d.instId);
+  private dispatch(instType: BitgetInstType, d: TickerData) {
+    const set = this.handlers.get(key(instType, d.instId));
     if (!set) return;
     const lastPrice = Number(d.lastPr);
     const open24h = Number(d.open24h);
@@ -185,15 +181,20 @@ export class BitgetWS {
     for (const h of set) h(t);
   }
 
-  /** Subscribe to a set of symbols. Returns an unsubscribe fn. */
-  subscribeTickers(symbols: string[], onTick: TickerHandler): () => void {
+  /** Subscribe to a set of symbols (perpetuals by default). Returns an unsubscribe fn. */
+  subscribeTickers(
+    symbols: string[],
+    onTick: TickerHandler,
+    instType: BitgetInstType = "USDT-FUTURES",
+  ): () => void {
+    const keys = symbols.map((s) => key(instType, s));
     const fresh: string[] = [];
-    for (const s of symbols) {
-      let set = this.handlers.get(s);
+    for (const k of keys) {
+      let set = this.handlers.get(k);
       if (!set) {
         set = new Set();
-        this.handlers.set(s, set);
-        fresh.push(s);
+        this.handlers.set(k, set);
+        fresh.push(k);
       }
       set.add(onTick);
     }
@@ -201,13 +202,13 @@ export class BitgetWS {
 
     return () => {
       const gone: string[] = [];
-      for (const s of symbols) {
-        const set = this.handlers.get(s);
+      for (const k of keys) {
+        const set = this.handlers.get(k);
         if (!set) continue;
         set.delete(onTick);
         if (set.size === 0) {
-          this.handlers.delete(s);
-          gone.push(s);
+          this.handlers.delete(k);
+          gone.push(k);
         }
       }
       if (gone.length > 0) this.sendUnsubscribe(gone);

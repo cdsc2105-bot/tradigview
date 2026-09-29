@@ -55,6 +55,8 @@ export function precisionFor(
 ): number {
   const known = registry[exchange]?.get(symbol.toUpperCase());
   if (known !== undefined) return known;
+  // Shares and indices are quoted in cents
+  if (exchange === "stocks") return 2;
   return precisionFromPrice(price);
 }
 

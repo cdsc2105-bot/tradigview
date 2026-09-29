@@ -26,6 +26,9 @@ export function baseAsset(symbol: string): string {
 function logoUrl(symbol: string): { src: string; stock: boolean } | null {
   if (STOCK_ICONS.has(symbol)) return { src: `/icons/stocks/${symbol}.svg`, stock: true };
   const base = baseAsset(symbol);
+  // A share traded on a crypto venue (NVDAUSDT, NVDAXUSDT, NVDAONUSDT)
+  const share = [base, base.replace(/(X|ON)$/, "")].find((b) => STOCK_ICONS.has(b));
+  if (symbol.endsWith("USDT") && share) return { src: `/icons/stocks/${share}.svg`, stock: true };
   if (CRYPTO_ICONS.has(base)) return { src: `/icons/crypto/${base}.svg`, stock: false };
   // Not bundled: the same open icon set, served by Iconify. A miss falls back
   // to the neutral placeholder below rather than to a made-up logo.

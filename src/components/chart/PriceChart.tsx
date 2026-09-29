@@ -19,6 +19,8 @@ import {
 } from "lightweight-charts";
 import { fetchKlines } from "@/lib/binance/rest";
 import { fetchBitgetKlines } from "@/lib/exchanges/bitget";
+import { fetchBitgetSpotKlines } from "@/lib/exchanges/bitget-spot";
+import { fetchBitunixFuturesKlines, fetchBitunixSpotKlines } from "@/lib/exchanges/bitunix";
 import { fetchFuturesKlines } from "@/lib/exchanges/binance-futures";
 import { getBitgetWS } from "@/lib/exchanges/bitget-ws";
 import { fetchStockKlines, stockLabel } from "@/lib/exchanges/stocks";
@@ -53,6 +55,7 @@ import {
   RSI_COLORS,
   SESSION_COLORS,
   STOCH_COLORS,
+  EXCHANGE_LABELS,
   SHAPE_TOOLS,
   useChartStore,
   type DrawingTool,
@@ -81,7 +84,6 @@ import { formatPriceFor, precisionFor } from "@/lib/precision";
 import { cn } from "@/lib/utils";
 import { IndicatorPill } from "./IndicatorPill";
 import { timeframeLabel } from "./TimeframeSelector";
-import { MARKET_SOURCES } from "@/components/header/MarketSourceSelect";
 import { MeasureOverlay } from "./MeasureOverlay";
 import { DrawingToolbar, type DrawingSelection } from "./DrawingToolbar";
 
@@ -171,7 +173,10 @@ const KLINE_FETCHERS: Record<
 > = {
   binance: fetchKlines,
   binancef: fetchFuturesKlines,
+  bitgetspot: fetchBitgetSpotKlines,
   bitget: fetchBitgetKlines,
+  bitunix: fetchBitunixSpotKlines,
+  bitunixf: fetchBitunixFuturesKlines,
   stocks: fetchStockKlines,
 };
 
@@ -3186,7 +3191,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     // polling within a few seconds instead of waiting 20.
     let lastStreamTick = 0;
     const staleMs = () =>
-      exchange !== "bitget" && Date.now() - lastStreamTick < 6_000 ? 20_000 : 2_000;
+      Date.now() - lastStreamTick < 6_000 ? 20_000 : 2_000;
     const watchdog = setInterval(() => {
       if (document.hidden) return; // don't burn requests in background tabs
       if (Date.now() - lastTick > staleMs()) void resync();
@@ -3297,14 +3302,19 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         // Bitget has no kline WebSocket, but its ticker WebSocket pushes the
         // last price in real time (~0.35s). Ride that to keep the forming candle
         // live between the REST resyncs that fix full OHLC and add new bars.
-        if (exchange === "bitget") {
+        if (exchange === "bitget" || exchange === "bitgetspot") {
           const bws = getBitgetWS();
           // Note: deliberately NOT resetting lastTick — the REST watchdog must
           // still fire to create new bars and correct volume/OHLC.
-          unsub = bws.subscribeTickers([symbol], (t) => applyPrice(t.lastPrice));
+          unsub = bws.subscribeTickers(
+            [symbol],
+            (t) => applyPrice(t.lastPrice),
+            exchange === "bitget" ? "USDT-FUTURES" : "SPOT",
+          );
           return;
         }
-        if (exchange === "stocks") return; // polled by the watchdog
+        // Bitunix and stocks: polled by the watchdog
+        if (exchange !== "binance" && exchange !== "binancef") return;
 
         const ws = exchange === "binancef" ? getBinanceFuturesWS() : getBinanceWS();
         const handleCandle = (k: Candle) => {
@@ -3563,7 +3573,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           <div className="flex max-w-sm flex-col items-center gap-3 rounded-xl border border-tv-border-strong bg-tv-surface px-5 py-4 text-center text-[13px] text-tv-text shadow-xl">
             <span>
               No se pudieron cargar los datos de{" "}
-              <b>{MARKET_SOURCES.find((m) => m.key === exchange)?.label ?? "este mercado"}</b>.
+              <b>{EXCHANGE_LABELS[exchange] ?? "este mercado"}</b>.
               {exchange === "binancef" &&
                 " Binance Futuros puede no estar disponible en tu país o red; prueba Binance · Spot o Bitget."}
             </span>
@@ -3616,7 +3626,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           <span className="text-tv-text-muted">·</span>
           <span>{timeframeLabel(timeframe)}</span>
           <span className="text-tv-text-muted">·</span>
-          <span className="uppercase">{MARKET_SOURCES.find((m) => m.key === exchange)?.label.replace(" · ", " ")}</span>
+          <span className="uppercase">{EXCHANGE_LABELS[exchange]}</span>
           <span
             className={cn(
               "ml-0.5 h-2 w-2 rounded-full",

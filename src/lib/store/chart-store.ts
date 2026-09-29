@@ -5,15 +5,39 @@ import { persist } from "zustand/middleware";
 import type { Timeframe } from "@/lib/binance/types";
 import { STOCK_SYMBOLS } from "@/lib/exchanges/stocks";
 
-export type Exchange = "binance" | "binancef" | "bitget" | "stocks";
+/**
+ * Data venue. The "…f" / plain "bitget" keys are USDT-M perpetual futures,
+ * the rest spot; "stocks" is the stock market (via /api/stocks).
+ */
+export type Exchange =
+  | "binance"
+  | "binancef"
+  | "bitgetspot"
+  | "bitget"
+  | "bitunix"
+  | "bitunixf"
+  | "stocks";
 
-/** Display names — "binancef" is Binance's USDT-M perpetual futures. */
+/** Display names. */
 export const EXCHANGE_LABELS: Record<Exchange, string> = {
-  binance: "Binance",
-  binancef: "Binance Perp",
-  bitget: "Bitget Perp",
-  stocks: "Acciones e índices",
+  binance: "Binance Spot",
+  binancef: "Binance Futuros",
+  bitgetspot: "Bitget Spot",
+  bitget: "Bitget Futuros",
+  bitunix: "Bitunix Spot",
+  bitunixf: "Bitunix Futuros",
+  stocks: "Bolsa",
 };
+
+/** Crypto venues in menu order. */
+export const CRYPTO_EXCHANGES: Exchange[] = [
+  "binance",
+  "binancef",
+  "bitgetspot",
+  "bitget",
+  "bitunix",
+  "bitunixf",
+];
 
 export type IndicatorKey =
   | "ema20"

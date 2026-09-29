@@ -12,21 +12,28 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { fetchSupportedSymbols } from "@/lib/exchanges/symbols";
-import { stockLabel } from "@/lib/exchanges/stocks";
+import { STOCK_SYMBOLS, stockLabel } from "@/lib/exchanges/stocks";
 import {
   useChartStore,
+  CRYPTO_EXCHANGES,
+  EXCHANGE_LABELS,
   POPULAR_SYMBOLS,
   type Exchange,
 } from "@/lib/store/chart-store";
 import { cn } from "@/lib/utils";
 
-const TABS: { key: Exchange; label: string }[] = [
-  { key: "binance", label: "Binance" },
-  { key: "binancef", label: "Binance Perp" },
-  { key: "bitget", label: "Bitget Perp" },
+type Tab = "crypto" | "stocks";
+const TABS: { key: Tab; label: string }[] = [
+  { key: "crypto", label: "Cripto" },
   { key: "stocks", label: "Acciones" },
 ];
 
+/**
+ * One search for all crypto venues: the list is the union of every venue's
+ * pairs, and picking one opens it on the current venue when that lists it
+ * (otherwise the first venue that does). The market can then be changed from
+ * the header's venue menu, which shows the price on each.
+ */
 export function SymbolSelector() {
   const symbol = useChartStore((s) => s.symbol);
   const exchange = useChartStore((s) => s.exchange);
@@ -37,87 +44,98 @@ export function SymbolSelector() {
   const setOpen = useChartStore((s) => s.setSymbolDialogOpen);
 
   const [query, setQuery] = useState("");
-  // Which exchange's list to browse — starts on the chart's current exchange.
-  const [tab, setTab] = useState<Exchange>(exchange);
-  const [symbolsByExchange, setSymbolsByExchange] = useState<
-    Partial<Record<Exchange, string[]>>
-  >({});
-  /** Venues whose full list failed to load (shown with a retry) */
+  const [tab, setTab] = useState<Tab>(exchange === "stocks" ? "stocks" : "crypto");
+  /** Each crypto venue's list as it arrives */
+  const [lists, setLists] = useState<Partial<Record<Exchange, Set<string>>>>({});
+  /** Venues whose list failed to load */
   const [failed, setFailed] = useState<Partial<Record<Exchange, boolean>>>({});
   const [retry, setRetry] = useState(0);
 
-  // When the dialog opens, sync the tab to the current exchange.
+  // When the dialog opens, start on the kind of asset being charted.
   useEffect(() => {
-    if (open) setTab(exchange);
+    if (open) setTab(exchange === "stocks" ? "stocks" : "crypto");
   }, [open, exchange]);
 
-  // Load the symbol list for the active tab (each venue lists different pairs —
-  // HYPEUSDT / Hyperliquid is Bitget-only, for instance).
+  // Load every crypto venue's list (each is fetched once per session and
+  // shared with the watchlist and the venue menu).
   useEffect(() => {
-    if (!open || symbolsByExchange[tab]) return;
+    if (!open) return;
     let cancelled = false;
-    fetchSupportedSymbols(tab)
-      .then((set) => {
-        if (cancelled) return;
-        setSymbolsByExchange((prev) => ({ ...prev, [tab]: [...set].sort() }));
-        setFailed((prev) => ({ ...prev, [tab]: false }));
-      })
-      .catch((e) => {
-        console.error(e);
-        if (!cancelled) setFailed((prev) => ({ ...prev, [tab]: true }));
-      });
+    for (const v of CRYPTO_EXCHANGES) {
+      if (lists[v]) continue;
+      fetchSupportedSymbols(v)
+        .then((set) => {
+          if (cancelled) return;
+          setLists((prev) => ({ ...prev, [v]: set }));
+          setFailed((prev) => ({ ...prev, [v]: false }));
+        })
+        .catch((e) => {
+          console.error(e);
+          if (!cancelled) setFailed((prev) => ({ ...prev, [v]: true }));
+        });
+    }
     return () => {
       cancelled = true;
     };
-  }, [open, tab, retry, symbolsByExchange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, retry]);
 
-  const loaded = symbolsByExchange[tab];
+  const loadedVenues = CRYPTO_EXCHANGES.filter((v) => lists[v]);
+  const pending = CRYPTO_EXCHANGES.some((v) => !lists[v] && !failed[v]);
+  const allFailed = CRYPTO_EXCHANGES.every((v) => failed[v]);
+  const loaded = tab === "stocks" || loadedVenues.length > 0;
+
+  /** The venue a crypto pick opens on: the current one if it lists the pair. */
+  const venueFor = (s: string): Exchange | null => {
+    const current = exchange !== "stocks" ? exchange : "binance";
+    if (lists[current]?.has(s)) return current;
+    return CRYPTO_EXCHANGES.find((v) => lists[v]?.has(s)) ?? null;
+  };
+
   const filtered = useMemo(() => {
-    // Until the venue's full list arrives, offer the well-known coins so the
-    // dialog is usable instantly; the list is filtered for real once loaded.
-    const list = symbolsByExchange[tab] ?? (tab === "stocks" ? [] : POPULAR_SYMBOLS);
     const q = query.trim().toUpperCase();
-
     let result: string[];
     if (tab === "stocks") {
       // Short curated list — show it whole, and match on the pretty name too
       // so "nasdaq" finds ^IXIC.
       result = q
-        ? list.filter(
-            (s) => s.includes(q) || stockLabel(s).toUpperCase().includes(q),
-          )
-        : list;
-    } else if (!q) {
-      // No search: show only the well-known coins (in popularity order) that
-      // this exchange actually lists — avoids the wall of obscure listings.
-      const listSet = new Set(list);
-      result = POPULAR_SYMBOLS.filter((s) => listSet.has(s));
+        ? STOCK_SYMBOLS.filter((s) => s.includes(q) || stockLabel(s).toUpperCase().includes(q))
+        : STOCK_SYMBOLS;
     } else {
-      // Searching: match everything, but float known coins to the top.
-      const rank = new Map(POPULAR_SYMBOLS.map((s, i) => [s, i]));
-      result = list
-        .filter((s) => s.includes(q))
-        .sort((a, b) => {
-          const ra = rank.get(a) ?? Infinity;
-          const rb = rank.get(b) ?? Infinity;
-          return ra !== rb ? ra - rb : a.localeCompare(b);
-        });
+      const union = new Set<string>();
+      for (const v of CRYPTO_EXCHANGES) lists[v]?.forEach((s) => union.add(s));
+      // Until a list arrives, offer the well-known coins so the dialog is
+      // usable instantly.
+      const all = union.size > 0 ? union : new Set(POPULAR_SYMBOLS);
+      if (!q) {
+        // No search: the well-known coins, in popularity order.
+        result = POPULAR_SYMBOLS.filter((s) => all.has(s));
+      } else {
+        // Searching: match everything, known coins and exact names first.
+        const rank = new Map(POPULAR_SYMBOLS.map((s, i) => [s, i]));
+        const score = (s: string) =>
+          s === `${q}USDT` || s === q ? -2 : s.startsWith(q) ? -1 : 0;
+        result = [...all]
+          .filter((s) => s.includes(q))
+          .sort((a, b) => {
+            const sa = score(a) - score(b);
+            if (sa !== 0) return sa;
+            const ra = rank.get(a) ?? Infinity;
+            const rb = rank.get(b) ?? Infinity;
+            return ra !== rb ? ra - rb : a.localeCompare(b);
+          });
+      }
     }
 
     return result.slice(0, 100).map((s) => ({
       symbol: s,
-      baseAsset:
-        tab === "stocks"
-          ? stockLabel(s)
-          : s.endsWith("USDT")
-            ? s.slice(0, -4)
-            : s,
+      baseAsset: tab === "stocks" ? stockLabel(s) : s.endsWith("USDT") ? s.slice(0, -4) : s,
       quoteAsset: tab === "stocks" ? "" : s.endsWith("USDT") ? "USDT" : "",
     }));
-  }, [query, symbolsByExchange, tab]);
+  }, [query, lists, tab]);
 
   const select = (s: string) => {
-    setExchange(tab);
+    setExchange(tab === "stocks" ? "stocks" : (venueFor(s) ?? "binance"));
     setSymbol(s);
     addToWatchlist(s);
     setOpen(false);
@@ -169,28 +187,22 @@ export function SymbolSelector() {
         <div className="border-b border-tv-border p-3">
           <Input
             autoFocus
-            placeholder="BTC, ETH, HYPE…"
+            placeholder={tab === "stocks" ? "NVDA, TSLA, Nasdaq…" : "BTC, ETH, HYPE…"}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="bg-tv-bg"
           />
-          {tab === "binance" && query.trim().toUpperCase().startsWith("HYPE") && (
-            <p className="mt-2 text-[11px] text-tv-yellow">
-              ¿Buscas Hyperliquid (HYPE)? Está solo en Bitget → toca la pestaña
-              “Bitget Perp”.
-            </p>
-          )}
         </div>
 
         <ScrollArea className="h-[380px]">
           <div className="flex flex-col">
-            {failed[tab] && !loaded && (
+            {tab === "crypto" && allFailed && (
               <div className="flex items-center justify-between gap-3 border-b border-tv-border px-4 py-2 text-[11px] text-tv-yellow">
-                <span>No se pudo cargar la lista completa de este mercado.</span>
+                <span>No se pudo cargar la lista de monedas.</span>
                 <button
                   type="button"
                   onClick={() => {
-                    setFailed((prev) => ({ ...prev, [tab]: false }));
+                    setFailed({});
                     setRetry((r) => r + 1);
                   }}
                   className="shrink-0 rounded border border-tv-border px-2 py-0.5 text-tv-text hover:bg-tv-panel-hover"
@@ -202,7 +214,7 @@ export function SymbolSelector() {
             {!query.trim() && filtered.length > 0 && (
               <div className="select-none px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
                 Populares · escribe para buscar más
-                {!loaded && !failed[tab] && tab !== "stocks" && (
+                {tab === "crypto" && pending && (
                   <span className="ml-1 normal-case tracking-normal text-tv-text-dim">
                     (cargando lista completa…)
                   </span>
@@ -211,7 +223,7 @@ export function SymbolSelector() {
             )}
             {filtered.length === 0 && (
               <div className="p-4 text-center text-xs text-tv-text-muted">
-                {loaded || failed[tab] ? "Sin resultados" : "Cargando…"}
+                {loaded || allFailed ? "Sin resultados" : "Cargando…"}
               </div>
             )}
             {filtered.map((s) => (
@@ -220,7 +232,7 @@ export function SymbolSelector() {
                 onClick={() => select(s.symbol)}
                 className={cn(
                   "flex items-center justify-between border-b border-tv-border px-4 py-2 text-left text-xs hover:bg-tv-panel-hover",
-                  s.symbol === symbol && tab === exchange && "bg-tv-panel-hover",
+                  s.symbol === symbol && (tab === "stocks") === (exchange === "stocks") && "bg-tv-panel-hover",
                 )}
               >
                 <div className="flex items-center gap-3">
@@ -231,7 +243,7 @@ export function SymbolSelector() {
                   )}
                 </div>
                 <span className="text-[10px] text-tv-text-dim">
-                  {TABS.find((t) => t.key === tab)?.label}
+                  {tab === "stocks" ? "Bolsa" : EXCHANGE_LABELS[venueFor(s.symbol) ?? "binance"]}
                 </span>
               </button>
             ))}

@@ -4,7 +4,11 @@ import { useState, type ReactNode } from "react";
 import { Activity, CandlestickChart, List, PenTool, SlidersHorizontal, X } from "lucide-react";
 import { IndicatorList } from "@/components/chart/IndicatorMenu";
 import { LayoutSwitch } from "@/components/header/LayoutSwitch";
-import { MARKET_SOURCES, useSwitchMarket } from "@/components/header/MarketSourceSelect";
+import {
+  MarketOptionRow,
+  useMarketOptions,
+  useSwitchMarket,
+} from "@/components/header/MarketSourceSelect";
 import { TOOLS } from "@/components/layout/LeftSidebar";
 import { useChartStore } from "@/lib/store/chart-store";
 import { cn } from "@/lib/utils";
@@ -52,6 +56,7 @@ export function MobileTabBar() {
   const exchange = useChartStore((s) => s.exchange);
   const reload = useChartStore((s) => s.reload);
   const switchMarket = useSwitchMarket();
+  const markets = useMarketOptions(sheet === "more");
 
   const tabs = [
     {
@@ -178,24 +183,19 @@ export function MobileTabBar() {
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-tv-text-dim">
                 Mercado
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                {MARKET_SOURCES.map((m) => (
-                  <button
-                    key={m.key}
-                    type="button"
-                    onClick={() => {
-                      void switchMarket(m.key);
+              <div className="mb-1 text-[11px] text-tv-text-muted">{markets.title}</div>
+              <div className="flex flex-col gap-1">
+                {markets.options.map((o) => (
+                  <MarketOptionRow
+                    key={o.key}
+                    option={o}
+                    active={exchange === o.key}
+                    className="border border-tv-border"
+                    onPick={() => {
+                      void switchMarket(o.key);
                       setSheet(null);
                     }}
-                    className={cn(
-                      "rounded-lg border px-3 py-2 text-left text-[13px]",
-                      exchange === m.key
-                        ? "border-tv-accent bg-tv-accent/10 text-tv-text"
-                        : "border-tv-border text-tv-text-muted",
-                    )}
-                  >
-                    {m.label}
-                  </button>
+                  />
                 ))}
               </div>
             </div>
