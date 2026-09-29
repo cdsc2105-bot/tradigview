@@ -88,6 +88,13 @@ const NO_INDICATORS: Record<IndicatorKey, boolean> = {
   cipher: false,
 };
 
+/** What each layout remembers on its own besides its indicators. */
+export interface LayoutState {
+  timeframe: Timeframe;
+  favoriteTimeframes: Timeframe[];
+  hidden: Record<IndicatorKey, boolean>;
+}
+
 export const LAYOUT_PRESETS: Record<LayoutKey, Record<IndicatorKey, boolean>> = {
   vwap: {
     ...NO_INDICATORS,
@@ -555,6 +562,11 @@ interface ChartState {
   layout: LayoutKey;
   /** Indicator set each layout had when the user last left it */
   layoutIndicators: Partial<Record<LayoutKey, Record<IndicatorKey, boolean>>>;
+  /**
+   * Timeframe, starred timeframes and hidden (eye-off) indicators each layout
+   * had when the user last left it — every view keeps its own.
+   */
+  layoutState: Partial<Record<LayoutKey, LayoutState>>;
 
   // Ephemeral UI state (not persisted)
   tool: DrawingTool;
@@ -662,6 +674,7 @@ export const useChartStore = create<ChartState>()(
       favoriteTimeframes: TIMEFRAME_BUTTONS,
       layout: "vwap" as LayoutKey,
       layoutIndicators: {},
+      layoutState: {},
       hidden: {
         ema20: false,
         ema50: false,
@@ -714,13 +727,27 @@ export const useChartStore = create<ChartState>()(
       setLayout: (layout) =>
         set((s) => {
           if (layout === s.layout) return s;
+          // Park this view's timeframe, stars and eye toggles; bring back the
+          // other view's (or its defaults the first time it's opened).
+          const next = s.layoutState[layout];
           return {
             layout,
             layoutIndicators: { ...s.layoutIndicators, [s.layout]: s.indicators },
+            layoutState: {
+              ...s.layoutState,
+              [s.layout]: {
+                timeframe: s.timeframe,
+                favoriteTimeframes: s.favoriteTimeframes,
+                hidden: s.hidden,
+              },
+            },
             indicators: {
               ...NO_INDICATORS,
               ...(s.layoutIndicators[layout] ?? LAYOUT_PRESETS[layout]),
             },
+            timeframe: next?.timeframe ?? "15m",
+            favoriteTimeframes: next?.favoriteTimeframes ?? TIMEFRAME_BUTTONS,
+            hidden: { ...NO_INDICATORS, ...next?.hidden },
             maximizedPane: null,
           };
         }),
@@ -1094,6 +1121,7 @@ export const useChartStore = create<ChartState>()(
         indicators: s.indicators,
         layout: s.layout,
         layoutIndicators: s.layoutIndicators,
+        layoutState: s.layoutState,
         hidden: s.hidden,
         config: s.config,
         watchlist: s.watchlist,
@@ -1140,9 +1168,26 @@ export const useChartStore = create<ChartState>()(
           (s) => !DEFAULT_WATCHLIST.includes(s) && !PURGE.has(s),
         );
 
+        // Each layout's parked timeframe / stars / eye toggles, checked
+        // against what exists today.
+        const layoutState: ChartState["layoutState"] = {};
+        for (const key of Object.keys(LAYOUT_LABELS) as LayoutKey[]) {
+          const saved = p.layoutState?.[key];
+          if (!saved) continue;
+          const favs = Array.isArray(saved.favoriteTimeframes)
+            ? ALL_TIMEFRAMES.filter((t) => saved.favoriteTimeframes.includes(t))
+            : TIMEFRAME_BUTTONS;
+          layoutState[key] = {
+            timeframe: ALL_TIMEFRAMES.includes(saved.timeframe) ? saved.timeframe : "15m",
+            favoriteTimeframes: favs,
+            hidden: { ...NO_INDICATORS, ...saved.hidden },
+          };
+        }
+
         return {
           ...current,
           ...p,
+          layoutState,
           exchange: p.exchange ?? "binance",
           indicators: { ...current.indicators, ...p.indicators },
           hidden: { ...current.hidden, ...p.hidden },
