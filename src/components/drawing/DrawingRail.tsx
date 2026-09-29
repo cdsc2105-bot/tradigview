@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useChartStore } from "@/lib/store/chart-store";
 import { cn } from "@/lib/utils";
 import { ACTION_ICONS, DrawIcon, TOOL_ICONS } from "./icons";
 import { TOOL_GROUPS, toolDef, type ToolId } from "./tools";
@@ -67,7 +68,15 @@ const Sep = () => <span className="my-1 h-px w-6 shrink-0 bg-tv-border" />;
  */
 export function DrawingRail() {
   const { engine, state } = useDrawingEngine();
+  const chartTool = useChartStore((s) => s.tool);
+  const setChartTool = useChartStore((s) => s.setTool);
+  const rulerOn = chartTool === "measure";
   const [current, setCurrent] = useState<Record<string, ToolId>>({});
+
+  // Arming a drawing tool (rail, menu or Alt+ shortcut) puts the ruler away
+  useEffect(() => {
+    if (state.tool && useChartStore.getState().tool === "measure") setChartTool("cursor");
+  }, [state.tool, setChartTool]);
   const [open, setOpen] = useState<{ group: string; top: number; left: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -153,6 +162,17 @@ export function DrawingRail() {
           </div>
         );
       })}
+
+      <RailButton
+        label="Regla: mide precio, %, barras y tiempo (Esc cancela)"
+        active={rulerOn}
+        onClick={() => {
+          engine?.setTool(null);
+          setChartTool(rulerOn ? "cursor" : "measure");
+        }}
+      >
+        <DrawIcon>{ACTION_ICONS.ruler}</DrawIcon>
+      </RailButton>
 
       <Sep />
       <RailButton

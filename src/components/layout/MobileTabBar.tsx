@@ -173,9 +173,18 @@ export function MobileTabBar() {
                 </div>
               </div>
             ))}
-            <div className="grid grid-cols-4 gap-2 pt-1">
+            <div className="grid grid-cols-5 gap-2 pt-1">
               {(
                 [
+                  [
+                    "Regla",
+                    ACTION_ICONS.ruler,
+                    () => {
+                      engine?.setTool(null);
+                      useChartStore.getState().setTool("measure");
+                      setSheet(null);
+                    },
+                  ],
                   ["Deshacer", ACTION_ICONS.undo, () => engine?.undo()],
                   ["Rehacer", ACTION_ICONS.redo, () => engine?.redo()],
                   ["Ocultar todos", ACTION_ICONS.eye, () => engine?.hideAll()],

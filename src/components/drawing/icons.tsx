@@ -361,6 +361,12 @@ export const ACTION_ICONS = {
   ),
   text: <path d="M7 9V6h14v3M14 6v16M11 22h6" />,
   chevron: <path d="m11 8.5 5.5 5.5-5.5 5.5" />,
+  ruler: (
+    <>
+      <path d="M4 18.5 18.5 4 24 9.5 9.5 24z" />
+      <path className="dim" d="m8 14.5 2 2M10.5 12l3 3M13 9.5l2 2M15.5 7l3 3" />
+    </>
+  ),
   cursor: <path d="M8 5v16l4.5-4.5 3 6.5 2.5-1-3-6.5H21z" />,
 };
 
