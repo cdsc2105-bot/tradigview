@@ -100,7 +100,17 @@ export type DrawingTool = "cursor" | "hline" | "measure" | "eraser" | ShapeKind;
 /** Tools that place a shape (as opposed to navigating or erasing). */
 export const SHAPE_TOOLS: readonly ShapeKind[] = ["trend", "ray", "fib", "rect", "text"];
 
-export interface PriceLine {
+/** Per-drawing look, editable from the selection toolbar. */
+export interface DrawingStyle {
+  /** Line color (defaults to the app blue) */
+  color?: string;
+  /** Line width in px, 1–4 */
+  width?: number;
+  /** Locked drawings can't be moved or erased */
+  locked?: boolean;
+}
+
+export interface PriceLine extends DrawingStyle {
   id: string;
   symbol: string;
   price: number;
@@ -111,7 +121,7 @@ export interface PriceLine {
  * trend line, ray, Fibonacci retracement, rectangle — or a text note, which
  * uses only the first point.
  */
-export interface TrendLine {
+export interface TrendLine extends DrawingStyle {
   id: string;
   symbol: string;
   /** Missing on drawings saved before other shapes existed → "trend" */
@@ -507,6 +517,11 @@ interface ChartState {
   ) => void;
   /** Clears price lines AND trend lines for the symbol (or all) */
   clearPriceLines: (symbol?: string) => void;
+  /** Restyle / relock / retext a drawing (one undo step) */
+  updateTrendLine: (id: string, patch: Partial<Omit<TrendLine, "id" | "symbol">>) => void;
+  updatePriceLine: (id: string, patch: Partial<Omit<PriceLine, "id" | "symbol">>) => void;
+  /** Duplicate a drawing, nudged so both stay visible; returns the new id */
+  cloneDrawing: (kind: "shape" | "hline", id: string) => string | null;
   /** Save the current drawings for undo — call before a drag starts */
   checkpointDrawings: () => void;
   undoDrawing: () => void;
@@ -520,6 +535,11 @@ interface ChartState {
   /** Toggle a pane between big and normal (same key twice = restore) */
   toggleMaximizedPane: (k: IndicatorKey) => void;
 }
+
+const makeId = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random()}`;
 
 const snapshotOf = (s: DrawingSnapshot): DrawingSnapshot => ({
   priceLines: s.priceLines,
@@ -536,7 +556,7 @@ const withCheckpoint = (
 
 export const useChartStore = create<ChartState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       symbol: "BTCUSDT",
       exchange: "binance" as Exchange,
       timeframe: "15m" as Timeframe,
@@ -729,10 +749,7 @@ export const useChartStore = create<ChartState>()(
           priceLines: [
             ...state.priceLines,
             {
-              id:
-                typeof crypto !== "undefined" && "randomUUID" in crypto
-                  ? crypto.randomUUID()
-                  : `${Date.now()}-${Math.random()}`,
+              id: makeId(),
               symbol,
               price,
             },
@@ -745,10 +762,7 @@ export const useChartStore = create<ChartState>()(
             ...state.trendLines,
             {
               ...line,
-              id:
-                typeof crypto !== "undefined" && "randomUUID" in crypto
-                  ? crypto.randomUUID()
-                  : `${Date.now()}-${Math.random()}`,
+              id: makeId(),
             },
           ],
         })),
@@ -785,6 +799,44 @@ export const useChartStore = create<ChartState>()(
             : [],
         })),
       checkpointDrawings: () => set((state) => withCheckpoint(state)),
+      updateTrendLine: (id, patch) =>
+        set((state) => ({
+          ...withCheckpoint(state),
+          trendLines: state.trendLines.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+        })),
+      updatePriceLine: (id, patch) =>
+        set((state) => ({
+          ...withCheckpoint(state),
+          priceLines: state.priceLines.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+        })),
+      cloneDrawing: (kind, id) => {
+        const state = get();
+        const newId = makeId();
+        if (kind === "shape") {
+          const t = state.trendLines.find((x) => x.id === id);
+          if (!t) return null;
+          // Shift the copy by 3% of its own height so it doesn't sit exactly on top
+          const dp = (Math.abs(t.p2 - t.p1) || Math.abs(t.p1) * 0.01) * 0.03;
+          set({
+            ...withCheckpoint(state),
+            trendLines: [
+              ...state.trendLines,
+              { ...t, id: newId, p1: t.p1 - dp, p2: t.p2 - dp, locked: false },
+            ],
+          });
+        } else {
+          const p = state.priceLines.find((x) => x.id === id);
+          if (!p) return null;
+          set({
+            ...withCheckpoint(state),
+            priceLines: [
+              ...state.priceLines,
+              { ...p, id: newId, price: p.price * 0.997, locked: false },
+            ],
+          });
+        }
+        return newId;
+      },
       undoDrawing: () =>
         set((state) => {
           const prev = state.undoStack.at(-1);

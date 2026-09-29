@@ -20,6 +20,11 @@ export interface ShapeView {
   text?: string;
   /** The one being placed — drawn dashed */
   draft?: boolean;
+  /** Own color / line width (defaults: app blue, 2px lines) */
+  color?: string;
+  width?: number;
+  /** Selected in the chart — shows its handles */
+  selected?: boolean;
 }
 
 /** Converts chart space to pane pixels; null when it can't be placed. */
@@ -111,6 +116,8 @@ class ShapesRenderer implements IPrimitivePaneRenderer {
         const a = this._src.project(s.t1, s.p1);
         const b = this._src.project(s.t2, s.p2);
         if (!a || !b) continue;
+        const color = s.color ?? SHAPE_COLOR;
+        const width = s.width ?? 2;
         ctx.save();
         ctx.setLineDash(s.draft ? [5, 4] : []);
         ctx.font = "11px Inter, system-ui, sans-serif";
@@ -124,8 +131,8 @@ class ShapesRenderer implements IPrimitivePaneRenderer {
               x2 = b.x > a.x ? width : 0;
               y2 = a.y + k * (x2 - a.x);
             }
-            ctx.strokeStyle = SHAPE_COLOR;
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
             ctx.beginPath();
             ctx.moveTo(a.x, a.y);
             ctx.lineTo(x2, y2);
@@ -137,10 +144,10 @@ class ShapesRenderer implements IPrimitivePaneRenderer {
             const y = Math.min(a.y, b.y);
             const w = Math.abs(b.x - a.x);
             const h = Math.abs(b.y - a.y);
-            ctx.fillStyle = alpha(SHAPE_COLOR, 0.14);
+            ctx.fillStyle = alpha(color, 0.14);
             ctx.fillRect(x, y, w, h);
-            ctx.strokeStyle = SHAPE_COLOR;
-            ctx.lineWidth = 1;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = s.width ?? 1;
             ctx.strokeRect(x, y, w, h);
             break;
           }
@@ -158,7 +165,7 @@ class ShapesRenderer implements IPrimitivePaneRenderer {
               }
               prevY = pt.y;
               ctx.strokeStyle = color;
-              ctx.lineWidth = 1;
+              ctx.lineWidth = s.width ?? 1;
               ctx.beginPath();
               ctx.moveTo(left, pt.y);
               ctx.lineTo(right, pt.y);
@@ -182,8 +189,8 @@ class ShapesRenderer implements IPrimitivePaneRenderer {
             ctx.font = "13px Inter, system-ui, sans-serif";
             const w = ctx.measureText(label).width + 12;
             ctx.fillStyle = "rgba(19,24,35,0.9)";
-            ctx.strokeStyle = SHAPE_COLOR;
-            ctx.lineWidth = 1;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = s.selected ? 2 : 1;
             ctx.beginPath();
             ctx.roundRect(a.x, a.y - 11, w, 22, 4);
             ctx.fill();
@@ -196,6 +203,22 @@ class ShapesRenderer implements IPrimitivePaneRenderer {
           }
         }
         ctx.restore();
+
+        // Handles on the selected drawing's anchor points
+        if (s.selected && s.kind !== "text") {
+          ctx.save();
+          ctx.setLineDash([]);
+          for (const p of [a, b]) {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+            ctx.fillStyle = "#070b14";
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = color;
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
       }
     });
   }

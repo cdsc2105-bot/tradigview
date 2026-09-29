@@ -83,6 +83,7 @@ import { IndicatorPill } from "./IndicatorPill";
 import { timeframeLabel } from "./TimeframeSelector";
 import { MARKET_SOURCES } from "@/components/header/MarketSourceSelect";
 import { MeasureOverlay } from "./MeasureOverlay";
+import { DrawingToolbar, type DrawingSelection } from "./DrawingToolbar";
 
 interface MeasurePoint {
   time: number;
@@ -536,6 +537,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   measureRef.current = measure;
   /** Trend line being placed (first click done, second pending) */
   const [trendDraft, setTrendDraft] = useState<MeasureState>(INITIAL_MEASURE);
+  /** Drawing clicked in cursor mode — shows its handles and the style toolbar */
+  const [selected, setSelected] = useState<DrawingSelection | null>(null);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
   /** Text note being typed: where it goes on screen and in chart space */
   const [textDraft, setTextDraft] = useState<{
     x: number;
@@ -639,18 +644,21 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     });
 
     ema20Ref.current = chart.addSeries(LineSeries, {
+      crosshairMarkerVisible: false,
       color: INDICATOR_COLORS.ema20,
       lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: false,
     });
     ema50Ref.current = chart.addSeries(LineSeries, {
+      crosshairMarkerVisible: false,
       color: INDICATOR_COLORS.ema50,
       lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: false,
     });
     ema200Ref.current = chart.addSeries(LineSeries, {
+      crosshairMarkerVisible: false,
       color: INDICATOR_COLORS.ema200,
       lineWidth: 2,
       priceLineVisible: false,
@@ -874,6 +882,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       volumeMaRef.current = chartRef.current.addSeries(
         LineSeries,
         {
+          crosshairMarkerVisible: false,
           priceScaleId: "volume",
           color: "#e2c55a",
           lineWidth: 1,
@@ -901,6 +910,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         chartRef.current!.addSeries(
           LineSeries,
           {
+            crosshairMarkerVisible: false,
             color: TV_COLORS.textMuted,
             lineWidth: 1,
             lineStyle: 2,
@@ -912,6 +922,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       const r = chartRef.current.addSeries(
         LineSeries,
         {
+          crosshairMarkerVisible: false,
           color: configRef.current.rsiColor,
           lineWidth: 1,
           priceLineVisible: false,
@@ -923,6 +934,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       const rMa = chartRef.current.addSeries(
         LineSeries,
         {
+          crosshairMarkerVisible: false,
           color: configRef.current.rsiMaColor,
           lineWidth: 1,
           priceLineVisible: false,
@@ -972,6 +984,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       const m = chartRef.current.addSeries(
         LineSeries,
         {
+          crosshairMarkerVisible: false,
           color: INDICATOR_COLORS.macd,
           lineWidth: 1,
           priceLineVisible: false,
@@ -982,6 +995,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       const s = chartRef.current.addSeries(
         LineSeries,
         {
+          crosshairMarkerVisible: false,
           color: TV_COLORS.yellow,
           lineWidth: 1,
           priceLineVisible: false,
@@ -1020,6 +1034,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (indicators.bb && !bbUpperRef.current) {
       const bbColor = INDICATOR_COLORS.bb;
       bbUpperRef.current = chartRef.current.addSeries(LineSeries, {
+        crosshairMarkerVisible: false,
         color: bbColor,
         lineWidth: 1,
         lineStyle: 2,
@@ -1027,12 +1042,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         lastValueVisible: false,
       });
       bbMiddleRef.current = chartRef.current.addSeries(LineSeries, {
+        crosshairMarkerVisible: false,
         color: bbColor,
         lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: false,
       });
       bbLowerRef.current = chartRef.current.addSeries(LineSeries, {
+        crosshairMarkerVisible: false,
         color: bbColor,
         lineWidth: 1,
         lineStyle: 2,
@@ -1057,6 +1074,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (indicators.stoch && !stochKRef.current) {
       const paneIndex = 1 + (indicators.rsi ? 1 : 0) + (indicators.macd ? 1 : 0);
       stochKRef.current = chartRef.current.addSeries(LineSeries, {
+        crosshairMarkerVisible: false,
         ...OSC_SCALE,
         color: STOCH_COLORS.k,
         lineWidth: 1,
@@ -1065,12 +1083,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       }, paneIndex);
       stochKRef.current.priceScale().applyOptions({ scaleMargins: OSC_MARGINS });
       stochDRef.current = chartRef.current.addSeries(LineSeries, {
+        crosshairMarkerVisible: false,
         color: STOCH_COLORS.d,
         lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: true,
       }, paneIndex);
       stoch20Ref.current = chartRef.current.addSeries(LineSeries, {
+        crosshairMarkerVisible: false,
         color: TV_COLORS.textMuted,
         lineWidth: 1,
         lineStyle: 2,
@@ -1078,6 +1098,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         lastValueVisible: false,
       }, paneIndex);
       stoch80Ref.current = chartRef.current.addSeries(LineSeries, {
+        crosshairMarkerVisible: false,
         color: TV_COLORS.textMuted,
         lineWidth: 1,
         lineStyle: 2,
@@ -1116,6 +1137,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         (indicators.macd ? 1 : 0) +
         (indicators.stoch ? 1 : 0);
       srsiKRef.current = chartRef.current.addSeries(LineSeries, {
+        crosshairMarkerVisible: false,
         ...OSC_SCALE,
         color: STOCH_COLORS.k,
         lineWidth: 1,
@@ -1124,12 +1146,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       }, paneIndex);
       srsiKRef.current.priceScale().applyOptions({ scaleMargins: OSC_MARGINS });
       srsiDRef.current = chartRef.current.addSeries(LineSeries, {
+        crosshairMarkerVisible: false,
         color: STOCH_COLORS.d,
         lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: true,
       }, paneIndex);
       srsi20Ref.current = chartRef.current.addSeries(LineSeries, {
+        crosshairMarkerVisible: false,
         color: TV_COLORS.textMuted,
         lineWidth: 1,
         lineStyle: 2,
@@ -1137,6 +1161,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         lastValueVisible: false,
       }, paneIndex);
       srsi80Ref.current = chartRef.current.addSeries(LineSeries, {
+        crosshairMarkerVisible: false,
         color: TV_COLORS.textMuted,
         lineWidth: 1,
         lineStyle: 2,
@@ -1170,12 +1195,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (!chartRef.current) return;
     if (indicators.supertrend && !stBullRef.current) {
       stBullRef.current = chartRef.current.addSeries(LineSeries, {
+        crosshairMarkerVisible: false,
         color: INDICATOR_COLORS.supertrend,
         lineWidth: 2,
         priceLineVisible: false,
         lastValueVisible: false,
       });
       stBearRef.current = chartRef.current.addSeries(LineSeries, {
+        crosshairMarkerVisible: false,
         color: "#ef5350",
         lineWidth: 2,
         priceLineVisible: false,
@@ -1199,6 +1226,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     if (indicators.vwap && !vwapRef.current) {
       vwapRef.current = chart.addSeries(LineSeries, {
+        crosshairMarkerVisible: false,
         color: config.vwapColor,
         lineWidth: 2,
         priceLineVisible: false,
@@ -1230,6 +1258,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     while (refs.length < wanted) {
       refs.push(
         chart.addSeries(LineSeries, {
+          crosshairMarkerVisible: false,
           lineWidth: 1,
           priceLineVisible: false,
           lastValueVisible: true,
@@ -1272,6 +1301,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (indicators.ichimoku && !ichiTenkanRef.current) {
       const line = (color: string, width: number, style = 0) =>
         chart.addSeries(LineSeries, {
+          crosshairMarkerVisible: false,
           color,
           lineWidth: width as LineWidth,
           lineStyle: style,
@@ -1315,9 +1345,9 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     if (!chartRef.current) return;
     if (indicators.wavetrend && !wt1Ref.current) {
       const paneIndex = 1 + (indicators.rsi ? 1 : 0) + (indicators.macd ? 1 : 0) + (indicators.stoch ? 1 : 0) + (indicators.stochrsi ? 1 : 0);
-      wt1Ref.current = chartRef.current.addSeries(LineSeries, { color: INDICATOR_COLORS.wavetrend, lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, paneIndex);
-      wt2Ref.current = chartRef.current.addSeries(LineSeries, { color: "#ff5722", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, paneIndex);
-      wt0Ref.current = chartRef.current.addSeries(LineSeries, { color: TV_COLORS.textMuted, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false }, paneIndex);
+      wt1Ref.current = chartRef.current.addSeries(LineSeries, { crosshairMarkerVisible: false, color: INDICATOR_COLORS.wavetrend, lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, paneIndex);
+      wt2Ref.current = chartRef.current.addSeries(LineSeries, { crosshairMarkerVisible: false, color: "#ff5722", lineWidth: 1, priceLineVisible: false, lastValueVisible: false }, paneIndex);
+      wt0Ref.current = chartRef.current.addSeries(LineSeries, { crosshairMarkerVisible: false, color: TV_COLORS.textMuted, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false }, paneIndex);
       try {
         chartRef.current.panes()[paneIndex]?.setStretchFactor(1);
         chartRef.current.panes()[0]?.setStretchFactor(3);
@@ -1352,6 +1382,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         chart.addSeries(
           BaselineSeries,
           {
+            crosshairMarkerVisible: false,
             baseValue: { type: "price", price: 0 },
             topLineColor: lineColor,
             bottomLineColor: lineColor,
@@ -1393,6 +1424,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         chart.addSeries(
           LineSeries,
           {
+            crosshairMarkerVisible: false,
             color,
             lineWidth: 1,
             lineStyle: style,
@@ -1437,6 +1469,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         chart.addSeries(
           LineSeries,
           {
+            crosshairMarkerVisible: false,
             color,
             lineVisible: false,
             pointMarkersVisible: true,
@@ -1598,6 +1631,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     while (refs.length < lines.length) {
       refs.push(
         chart.addSeries(LineSeries, {
+          crosshairMarkerVisible: false,
           priceLineVisible: false,
           lastValueVisible: false,
           visible: false,
@@ -1683,21 +1717,25 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     }
     for (const pl of linesForThisSymbol) {
       const existing = map.get(pl.id);
+      const isSelected = selected?.kind === "hline" && selected.id === pl.id;
+      const style = {
+        price: pl.price,
+        color: pl.color ?? TV_COLORS.blue,
+        lineWidth: Math.min(4, (pl.width ?? 1) + (isSelected ? 1 : 0)) as LineWidth,
+        lineStyle: isSelected ? 0 : 2,
+      };
       if (existing) {
-        existing.applyOptions({ price: pl.price }); // follows drag-to-move
+        existing.applyOptions(style); // follows drag-to-move and restyling
       } else {
         const apiLine = series.createPriceLine({
-          price: pl.price,
-          color: TV_COLORS.blue,
-          lineWidth: 1,
-          lineStyle: 2,
+          ...style,
           axisLabelVisible: true,
           title: "",
         });
         map.set(pl.id, apiLine);
       }
     }
-  }, [priceLines, symbol, drawingsHidden]);
+  }, [priceLines, symbol, drawingsHidden, selected]);
 
   // Cursor style when drawing tools are active + reset drafts on tool change
   useEffect(() => {
@@ -1903,6 +1941,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       startX: number;
       startY: number;
       orig: { t1: number; p1: number; t2: number; p2: number } | { price: number };
+      /** Undo checkpoint is taken on the first real move, not on a mere click */
+      moved: boolean;
     }
     let drag: DragState | null = null;
 
@@ -1917,18 +1957,31 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       if (toolNow !== "cursor" && toolNow !== "eraser") return;
       const { x, y } = posOf(e);
       const hit = hitTestDrawings(x, y);
-      if (!hit || drawingsLockedRef.current) return;
+      if (!hit) {
+        // Clicking empty chart clears the selection (and pans as usual)
+        if (toolNow === "cursor") setSelected(null);
+        return;
+      }
 
       e.preventDefault();
       e.stopPropagation(); // keep lightweight-charts from starting a pan
 
+      const item =
+        hit.kind === "shape"
+          ? trendLinesRef.current.find((l) => l.id === hit.id)
+          : priceLinesRef.current.find((p) => p.id === hit.id);
+      const locked = drawingsLockedRef.current || item?.locked === true;
+
       if (toolNow === "eraser") {
+        if (locked) return;
         if (hit.kind === "shape") removeTrendLineRef.current(hit.id);
         else removePriceLineRef.current(hit.id);
         return;
       }
 
-      checkpointRef.current(); // one undo step per drag
+      // Select it (opens the style toolbar); locked drawings don't move.
+      setSelected({ kind: hit.kind, id: hit.id });
+      if (locked) return;
       const orig =
         hit.kind === "shape"
           ? (() => {
@@ -1936,7 +1989,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
               return { t1: t.t1, p1: t.p1, t2: t.t2, p2: t.p2 };
             })()
           : { price: priceLinesRef.current.find((p) => p.id === hit.id)!.price };
-      drag = { hit, startX: x, startY: y, orig };
+      drag = { hit, startX: x, startY: y, orig, moved: false };
       el.style.cursor = "grabbing";
     };
 
@@ -1955,6 +2008,11 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       const series = candleSeriesRef.current;
       if (!series) return;
       const { x, y } = posOf(e);
+      if (!drag.moved) {
+        if (Math.hypot(x - drag.startX, y - drag.startY) < 3) return;
+        drag.moved = true;
+        checkpointRef.current(); // one undo step per drag
+      }
 
       if (drag.hit.kind === "hline") {
         const price = series.coordinateToPrice(y);
@@ -2046,7 +2104,23 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         }
         return;
       }
+      // Supr / Backspace deletes the selected drawing (unless it's locked)
+      const sel = selectedRef.current;
+      if ((e.key === "Delete" || e.key === "Backspace") && sel && !typing) {
+        const item =
+          sel.kind === "shape"
+            ? trendLinesRef.current.find((t) => t.id === sel.id)
+            : priceLinesRef.current.find((p) => p.id === sel.id);
+        if (item && !item.locked && !drawingsLockedRef.current) {
+          e.preventDefault();
+          if (sel.kind === "shape") removeTrendLineRef.current(sel.id);
+          else removePriceLineRef.current(sel.id);
+          setSelected(null);
+        }
+        return;
+      }
       if (e.key !== "Escape") return;
+      setSelected(null);
       setMeasure(INITIAL_MEASURE);
       setTrendDraft(INITIAL_MEASURE);
       setTextDraft(null);
@@ -2105,13 +2179,20 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     return () => el.removeEventListener("dblclick", onDbl);
   }, []);
 
+  // A selection belongs to the symbol it was made on
+  useEffect(() => () => setSelected(null), [symbol]);
+
   // Paint the symbol's drawings (plus the one being placed, dashed)
   useEffect(() => {
     const prim = shapesRef.current;
     if (!prim) return;
     const shapes: ShapeView[] = trendLines
       .filter((t) => t.symbol === symbol)
-      .map((t) => ({ ...t, kind: t.kind ?? "trend" }));
+      .map((t) => ({
+        ...t,
+        kind: t.kind ?? "trend",
+        selected: selected?.kind === "shape" && selected.id === t.id,
+      }));
     if (trendDraft.phase === "placing" && trendDraft.a && trendDraft.b && isShapeTool(tool)) {
       shapes.push({
         kind: tool,
@@ -2123,7 +2204,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       });
     }
     prim.setShapes(shapes, !drawingsHidden);
-  }, [trendLines, symbol, trendDraft, tool, drawingsHidden]);
+  }, [trendLines, symbol, trendDraft, tool, drawingsHidden, selected]);
 
   /**
    * Recolor every volume bar by its relative volume (bar ÷ 21-bar average),
@@ -3437,6 +3518,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
       {measureRender}
+
+      {selected && tool === "cursor" && !drawingsHidden && (
+        <DrawingToolbar selection={selected} onSelect={setSelected} />
+      )}
 
       {textDraft && (
         <input

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, Plus, Search, X } from "lucide-react";
+import { Check, ChevronDown, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { CoinIcon } from "@/components/brand/CoinIcon";
 import { fetchTickers24h } from "@/lib/binance/rest";
 import { fetchBitgetTickers } from "@/lib/exchanges/bitget";
@@ -133,6 +133,8 @@ export function Watchlist() {
     null,
   );
   const [collapsed, setCollapsed] = useState(false);
+  /** Edit mode: a delete button on every row (for touch, where there's no hover) */
+  const [editing, setEditing] = useState(false);
   /** Venue whose symbol list failed to load, and a bump to retry it */
   const [failedFor, setFailedFor] = useState<Exchange | null>(null);
   const [retry, setRetry] = useState(0);
@@ -171,15 +173,30 @@ export function Watchlist() {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-tv-border px-4">
         <h2 className="text-[15px] font-semibold text-tv-text">Favoritos</h2>
-        <button
-          type="button"
-          onClick={() => openSymbolDialog(true)}
-          className="rounded-md p-1.5 text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text"
-          title="Agregar moneda"
-          aria-label="Agregar moneda"
-        >
-          <Plus className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => openSymbolDialog(true)}
+            className="rounded-md p-1.5 text-tv-text-muted hover:bg-tv-panel-hover hover:text-tv-text"
+            title="Agregar moneda"
+            aria-label="Agregar moneda"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setEditing((v) => !v)}
+            aria-pressed={editing}
+            className={cn(
+              "rounded-md p-1.5 hover:bg-tv-panel-hover",
+              editing ? "text-tv-accent" : "text-tv-text-muted hover:text-tv-text",
+            )}
+            title={editing ? "Listo" : "Editar lista"}
+            aria-label={editing ? "Terminar de editar" : "Editar lista"}
+          >
+            {editing ? <Check className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
+          </button>
+        </div>
       </div>
 
       <div className="grid shrink-0 grid-cols-[1fr_auto_4rem] gap-2 px-4 pb-1 pt-2 text-[11px] text-tv-text-muted">
@@ -239,7 +256,7 @@ export function Watchlist() {
                   onClick={() => select(s)}
                   onKeyDown={(e) => e.key === "Enter" && select(s)}
                   className={cn(
-                    "group relative grid h-7 cursor-pointer grid-cols-[1fr_auto_4rem] items-center gap-2 rounded-md border px-2.5 text-[13px] transition-colors",
+                    "group grid h-7 cursor-pointer grid-cols-[1fr_auto_4rem] items-center gap-2 rounded-md border px-2.5 text-[13px] transition-colors",
                     active
                       ? "border-tv-border-strong bg-tv-panel-hover"
                       : "border-transparent hover:bg-tv-panel-hover",
@@ -251,27 +268,35 @@ export function Watchlist() {
                       {isStocks ? stockLabel(s) : s}
                     </span>
                   </span>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeFromWatchlist(s);
-                    }}
-                    className="absolute -left-1 top-1/2 hidden -translate-y-1/2 rounded-full bg-tv-surface p-0.5 text-tv-text-muted ring-1 ring-tv-border hover:text-tv-red group-hover:block"
-                    aria-label={`Quitar ${s} de favoritos`}
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </button>
                   <span className="text-right font-mono text-xs tabular-nums text-tv-text">
                     {row ? formatPriceFor(exchange, s, row.price) : "—"}
                   </span>
-                  <span
-                    className={cn(
-                      "text-right font-mono text-xs tabular-nums",
-                      !row ? "text-tv-text-dim" : row.pct >= 0 ? "text-tv-green" : "text-tv-red",
-                    )}
-                  >
-                    {row ? `${row.pct >= 0 ? "+" : ""}${row.pct.toFixed(2)}%` : "—"}
+                  {/* Change %, swapped for a delete button on hover (or in edit mode) */}
+                  <span className="relative flex h-full items-center justify-end">
+                    <span
+                      className={cn(
+                        "font-mono text-xs tabular-nums",
+                        editing ? "hidden" : "group-hover:invisible",
+                        !row ? "text-tv-text-dim" : row.pct >= 0 ? "text-tv-green" : "text-tv-red",
+                      )}
+                    >
+                      {row ? `${row.pct >= 0 ? "+" : ""}${row.pct.toFixed(2)}%` : "—"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeFromWatchlist(s);
+                      }}
+                      className={cn(
+                        "absolute right-0 rounded-md p-1 text-tv-text-muted hover:bg-tv-red/15 hover:text-tv-red",
+                        editing ? "block" : "hidden group-hover:block",
+                      )}
+                      title="Quitar de favoritos"
+                      aria-label={`Quitar ${s} de favoritos`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </span>
                 </div>
               );
