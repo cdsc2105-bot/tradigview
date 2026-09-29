@@ -118,3 +118,11 @@ export async function fetchExchangeSymbols(): Promise<SymbolInfo[]> {
   }));
   return cachedSymbols!;
 }
+
+/** Just the last price of one pair — the lightest ticker request. */
+export async function fetchSpotPrice(symbol: string): Promise<number> {
+  const t = await spot<{ price: string }>(`/ticker/price?symbol=${symbol.toUpperCase()}`, {
+    timeoutMs: 6_000,
+  });
+  return parseFloat(t.price);
+}

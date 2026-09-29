@@ -93,3 +93,11 @@ export async function fetchFuturesSymbols(): Promise<string[]> {
 
   return live.map((s) => s.symbol.toUpperCase());
 }
+
+/** Just the last price of one perpetual — the lightest ticker request. */
+export async function fetchFuturesPrice(symbol: string): Promise<number> {
+  const t = await fapi<{ price: string }>(`/ticker/price?symbol=${symbol.toUpperCase()}`, {
+    timeoutMs: 6_000,
+  });
+  return parseFloat(t.price);
+}

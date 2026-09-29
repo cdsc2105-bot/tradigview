@@ -137,7 +137,9 @@ export async function fetchBitgetTicker(symbol: string): Promise<Ticker24h> {
 
   const json = await bitget<{ data?: unknown }>(`/ticker?${params}`);
   const raw = json.data as Record<string, unknown>[] | Record<string, unknown> | undefined;
-  const data = (Array.isArray(raw) ? raw[0] : raw) as Record<string, unknown>;
+  const data = (
+    Array.isArray(raw) ? (raw.find((t) => String(t.symbol).toUpperCase() === symbol.toUpperCase()) ?? raw[0]) : raw
+  ) as Record<string, unknown>;
 
   return mapTicker(data);
 }

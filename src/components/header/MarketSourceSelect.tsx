@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { PopoverPanel } from "@/components/ui/popover-panel";
 import { fetchSupportedSymbols } from "@/lib/exchanges/symbols";
@@ -75,90 +75,115 @@ export interface MarketOption {
 }
 
 /**
+ * Shared across menu openings (and the mobile sheet): which pair the asset
+ * is on each venue, and the last price seen there — so reopening the menu
+ * shows numbers at once while they refresh.
+ */
+const resolvedOn = new Map<string, string | null>(); // "asset>venue" → symbol
+const lastPrices = new Map<string, number | null>(); // "venue:symbol" → price
+const inFlight = new Set<string>();
+/** Mounted menus to redraw when any of the above changes */
+const listeners = new Set<() => void>();
+const notify = () => listeners.forEach((l) => l());
+
+function loadPrice(v: Exchange, s: string) {
+  const k = `${v}:${s}`;
+  if (inFlight.has(k)) return;
+  inFlight.add(k);
+  fetchLastPrice(v, s)
+    .then(
+      (p) => lastPrices.set(k, p),
+      () => lastPrices.set(k, lastPrices.get(k) ?? null),
+    )
+    .finally(() => {
+      inFlight.delete(k);
+      notify();
+    });
+}
+
+/**
  * The venues offered for the current asset, with its symbol and live price on
  * each: the six crypto venues for a coin; the stock market plus the crypto
- * venues that list the share for a stock. Loads only while `active`.
+ * venues that list the share for a stock. Loads while `warm` (menu open or
+ * hovered) and keeps refreshing while `open`.
  */
-export function useMarketOptions(active: boolean): { title: string; options: MarketOption[] } {
+export function useMarketOptions(
+  warm: boolean,
+  open = warm,
+): { title: string; options: MarketOption[] } {
   const symbol = useChartStore((s) => s.symbol);
   const exchange = useChartStore((s) => s.exchange);
   const stock = stockOf(exchange, symbol);
   const venues: Exchange[] = stock ? ["stocks", ...CRYPTO_EXCHANGES] : CRYPTO_EXCHANGES;
-
   const assetKey = `${exchange}:${symbol}`;
-  // State is tagged with the asset it belongs to, so switching assets starts clean.
-  const [found, setFound] = useState<{ asset: string; map: Partial<Record<Exchange, string | null>> }>({
-    asset: "",
-    map: {},
-  });
-  const [quotes, setQuotes] = useState<{ asset: string; map: Partial<Record<Exchange, number | null>> }>({
-    asset: "",
-    map: {},
-  });
-  const symbols: Partial<Record<Exchange, string | null>> = {
-    ...(found.asset === assetKey ? found.map : {}),
-    [exchange]: symbol,
-  };
-  const prices = quotes.asset === assetKey ? quotes.map : {};
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
 
-  // Which venues list the asset (symbol lists are cached after the first load)
+  // Redraw on any result — even one requested by an earlier render (hover)
   useEffect(() => {
-    if (!active) return;
-    let cancelled = false;
-    const put = (v: Exchange, s: string | null) =>
-      !cancelled &&
-      setFound((prev) => ({
-        asset: assetKey,
-        map: { ...(prev.asset === assetKey ? prev.map : {}), [v]: s },
-      }));
-    for (const v of venues) {
-      if (v === exchange) continue;
-      symbolOn(v, exchange, symbol).then(
-        (s) => put(v, s),
-        () => put(v, null),
-      );
-    }
+    listeners.add(rerender);
     return () => {
-      cancelled = true;
+      listeners.delete(rerender);
     };
-    // `venues` derives from the asset key
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, assetKey]);
+  }, []);
 
-  // Prices on each venue that lists it, refreshed while the menu is open
-  const listedKey = venues.map((v) => `${v}=${symbols[v] ?? ""}`).join(",");
   useEffect(() => {
-    if (!active) return;
-    let cancelled = false;
-    const load = () => {
+    if (!warm) return;
+
+    const loadAll = () => {
       for (const v of venues) {
-        const s = symbols[v];
-        if (!s) continue;
-        const put = (p: number | null | "keep") =>
-          !cancelled &&
-          setQuotes((prev) => {
-            const map = prev.asset === assetKey ? prev.map : {};
-            return { asset: assetKey, map: { ...map, [v]: p === "keep" ? (map[v] ?? null) : p } };
+        const rk = `${assetKey}>${v}`;
+        if (v === exchange) resolvedOn.set(rk, symbol);
+        const known = resolvedOn.get(rk);
+        if (known) {
+          loadPrice(v, known);
+          continue;
+        }
+        if (known === null || inFlight.has(rk)) continue;
+        // Don't wait for the venue's pair list: a coin is almost always the
+        // same pair everywhere, so ask its price right away. The list (cached
+        // after the first time) then confirms it or names the right pair.
+        if (!stock) loadPrice(v, symbol);
+        inFlight.add(rk);
+        symbolOn(v, exchange, symbol)
+          .then(
+            (s) => {
+              resolvedOn.set(rk, s);
+              if (s && s !== symbol) loadPrice(v, s);
+            },
+            // List unavailable: a coin keeps its pair (its price decides);
+            // a share can't be matched without the list.
+            () => resolvedOn.set(rk, stock ? null : symbol),
+          )
+          .finally(() => {
+            inFlight.delete(rk);
+            notify();
           });
-        fetchLastPrice(v, s).then(put, () => put("keep"));
       }
     };
-    load();
-    const id = setInterval(load, 3_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, listedKey]);
 
-  // A share quoted far from its stock-market price is a different asset that
-  // happens to share the ticker (e.g. a meme coin) — don't offer it.
-  const ref = stock ? prices.stocks : undefined;
+    loadAll();
+    const id = open ? setInterval(loadAll, 3_000) : undefined;
+    return () => {
+      if (id) clearInterval(id);
+    };
+    // `venues`/`stock` derive from the asset key
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [warm, open, assetKey]);
+
+  const ref = stock ? lastPrices.get(`stocks:${stock}`) : undefined;
   const options = venues
     .map((key): MarketOption => {
-      let s = symbols[key];
-      const price = prices[key];
+      const known = resolvedOn.get(`${assetKey}>${key}`);
+      // Before the list confirms it, show the guessed pair once it has a price
+      const guess = !stock && known === undefined ? symbol : undefined;
+      let s: string | null | undefined = known !== undefined ? known : guess;
+      let price = s ? lastPrices.get(`${key}:${s}`) : undefined;
+      if (known === undefined && guess && price === null) {
+        s = undefined; // guess failed — wait for the list
+        price = undefined;
+      }
+      // A share quoted far from its stock-market price is a different asset
+      // that happens to share the ticker (e.g. a meme coin) — don't offer it.
       if (stock && key !== "stocks" && ref && price && Math.abs(price / ref - 1) > 0.3) s = null;
       return { key, label: EXCHANGE_LABELS[key], symbol: s, price };
     })
@@ -169,12 +194,25 @@ export function useMarketOptions(active: boolean): { title: string; options: Mar
   return { title: `${name} en`, options };
 }
 
+/** Fetch every venue's pair list once the page has settled, so the venue menu opens ready. */
+function usePreloadVenueLists() {
+  useEffect(() => {
+    const t = setTimeout(() => {
+      for (const v of CRYPTO_EXCHANGES) void fetchSupportedSymbols(v).catch(() => {});
+    }, 4_000);
+    return () => clearTimeout(t);
+  }, []);
+}
+
 export function MarketSourceSelect() {
   const exchange = useChartStore((s) => s.exchange);
   const switchMarket = useSwitchMarket();
   const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
   const [open, setOpen] = useState(false);
-  const { title, options } = useMarketOptions(open);
+  /** Pointer over the button: start fetching before the click lands */
+  const [hovered, setHovered] = useState(false);
+  const { title, options } = useMarketOptions(open || hovered, open);
+  usePreloadVenueLists();
 
   return (
     <>
@@ -182,6 +220,10 @@ export function MarketSourceSelect() {
         ref={setAnchor}
         type="button"
         onClick={() => setOpen((o) => !o)}
+        onPointerEnter={() => setHovered(true)}
+        onPointerLeave={() => setHovered(false)}
+        onFocus={() => setHovered(true)}
+        onBlur={() => setHovered(false)}
         aria-haspopup="menu"
         aria-expanded={open}
         className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] text-tv-text hover:bg-tv-panel-hover"

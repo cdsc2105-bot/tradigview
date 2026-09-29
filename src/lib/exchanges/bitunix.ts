@@ -176,3 +176,18 @@ export async function fetchBitunixSpotSymbols(): Promise<string[]> {
   }
   return out;
 }
+
+/** Last price of one spot pair (`data` is the price, or an object holding it). */
+export async function fetchBitunixSpotPrice(symbol: string): Promise<number> {
+  const json = await spot<{ data?: unknown }>(`/market/last_price?symbol=${symbol}`, 6_000);
+  const d = json.data;
+  const price =
+    d && typeof d === "object"
+      ? num((d as Record<string, unknown>).price ?? (d as Record<string, unknown>).lastPrice ?? (d as Record<string, unknown>).last)
+      : num(d);
+  if (isFinite(price) && price > 0) return price;
+  // Unexpected shape: fall back to the daily candle's close
+  const [t] = await fetchBitunixSpotTickers([symbol]);
+  if (!t) throw new Error(`no price ${symbol}`);
+  return t.lastPrice;
+}

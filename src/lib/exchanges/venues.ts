@@ -1,9 +1,13 @@
 import type { Ticker24h } from "@/lib/binance/types";
-import { fetchTickers24h } from "@/lib/binance/rest";
-import { fetchFuturesTickers } from "@/lib/exchanges/binance-futures";
-import { fetchBitgetTickers } from "@/lib/exchanges/bitget";
+import { fetchSpotPrice, fetchTickers24h } from "@/lib/binance/rest";
+import { fetchFuturesPrice, fetchFuturesTickers } from "@/lib/exchanges/binance-futures";
+import { fetchBitgetTicker, fetchBitgetTickers } from "@/lib/exchanges/bitget";
 import { fetchBitgetSpotTickers } from "@/lib/exchanges/bitget-spot";
-import { fetchBitunixFuturesTickers, fetchBitunixSpotTickers } from "@/lib/exchanges/bitunix";
+import {
+  fetchBitunixFuturesTickers,
+  fetchBitunixSpotPrice,
+  fetchBitunixSpotTickers,
+} from "@/lib/exchanges/bitunix";
 import { STOCK_SYMBOLS, fetchStockTickers } from "@/lib/exchanges/stocks";
 import type { Exchange } from "@/lib/store/chart-store";
 
@@ -46,8 +50,22 @@ export function venueSymbolFor(stock: string, listed: Set<string>): string | nul
   return venueCandidates(stock).find((s) => listed.has(s)) ?? null;
 }
 
+/**
+ * Last price of one symbol, using each venue's single-pair endpoint (a few
+ * hundred bytes) rather than its full ticker list.
+ */
+const PRICE_FETCHERS: Record<Exchange, (symbol: string) => Promise<number | undefined>> = {
+  binance: fetchSpotPrice,
+  binancef: fetchFuturesPrice,
+  bitgetspot: async (s) => (await fetchBitgetSpotTickers([s]))[0]?.lastPrice,
+  bitget: async (s) => (await fetchBitgetTicker(s)).lastPrice,
+  bitunix: fetchBitunixSpotPrice,
+  bitunixf: async (s) => (await fetchBitunixFuturesTickers([s]))[0]?.lastPrice,
+  stocks: async (s) => (await fetchStockTickers([s]))[0]?.lastPrice,
+};
+
 /** Last price of one symbol on one venue (null when it has none). */
 export async function fetchLastPrice(exchange: Exchange, symbol: string): Promise<number | null> {
-  const [t] = await TICKER_FETCHERS[exchange]([symbol]);
-  return t && isFinite(t.lastPrice) && t.lastPrice > 0 ? t.lastPrice : null;
+  const p = await PRICE_FETCHERS[exchange](symbol);
+  return p !== undefined && isFinite(p) && p > 0 ? p : null;
 }
