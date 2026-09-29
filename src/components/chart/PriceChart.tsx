@@ -54,6 +54,7 @@ import {
   CIPHER_COLORS,
   RSI_COLORS,
   SESSION_COLORS,
+  SESSION_MARKETS,
   STOCH_COLORS,
   EXCHANGE_LABELS,
   SHAPE_TOOLS,
@@ -126,20 +127,39 @@ function distToSegment(
 const VOL_MA_PERIOD = 21;
 
 /**
- * Histogram bar color by relative volume (bar ÷ its average). Keeps the
- * green/red up-down hue but scales opacity so climax bars pop and quiet bars
- * fade — the quick "¿hay volumen o no?" read.
+ * Volume bar color, TradingView-style: the same hue as its candle at a fixed
+ * half opacity, so every bar reads "a la par" with the candle above it. (The
+ * relative-volume read lives in the pill, not in the bar colour.)
  */
-function volBarColor(isUp: boolean, rvol: number): string {
-  const hue = isUp ? "#c9ced8" : CANDLE_COLORS.down;
-  // Kept semi-transparent so even climax bars sit behind the candles rather
-  // than fighting them — still readable by relative intensity.
-  const alpha =
-    rvol >= 2 ? "cc" : // climax
-    rvol >= 1.2 ? "99" : // high
-    rvol >= 0.7 ? "66" : // normal
-    "40"; // low — faded
-  return `${hue}${alpha}`;
+function volBarColor(isUp: boolean): string {
+  // The light up-colour reads heavier than the teal, so it gets less opacity
+  // for the two to weigh the same.
+  return isUp ? `${CANDLE_COLORS.up}47` : `${CANDLE_COLORS.down}80`;
+}
+
+/** Share of the price pane the volume strip takes, from the bottom. */
+const VOLUME_STRIP = 0.2;
+
+/** Pill summary: "NY · LON · TOK ±1h30 · cierre -1h". */
+function sessionPillText(cfg: {
+  sessionMarkets: { id: string; enabled: boolean }[];
+  sessionOffsetMin: number;
+  sessionFlanks: boolean;
+  sessionClose: boolean;
+  sessionPreCloseMin: number;
+}): string {
+  const on = cfg.sessionMarkets.filter((m) => m.enabled);
+  const names =
+    on.length === 1
+      ? (SESSION_MARKETS.find((x) => x.id === on[0].id)?.name ?? "")
+      : on.map((m) => SESSION_MARKETS.find((x) => x.id === m.id)?.short).join(" · ");
+  if (!names) return "Ningún mercado";
+  const parts = [names];
+  if (cfg.sessionFlanks) parts.push(`±${offsetLabel(cfg.sessionOffsetMin)}`);
+  if (cfg.sessionClose && cfg.sessionPreCloseMin > 0) {
+    parts.push(`cierre -${offsetLabel(cfg.sessionPreCloseMin)}`);
+  }
+  return parts.join(" · ");
 }
 
 /** Spanish label for a relative-volume reading. */
@@ -362,9 +382,6 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const volumeMaRef = useRef<ISeriesApi<"Line"> | null>(null);
-  /** Volume-scale ceiling (≈ p90 × 1.4) and the bar count it was computed for */
-  const volumeCapRef = useRef(0);
-  const volumeCapLenRef = useRef(0);
   const ema20Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const ema50Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const ema200Ref = useRef<ISeriesApi<"Line"> | null>(null);
@@ -698,6 +715,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         return;
       }
 
+      // Clicking the VWAP or any of its bands opens its settings, like the
+      // indicator lines on TradingView. Drawings win: grabbing one stops the
+      // event before it gets here.
+      if (toolRef.current === "cursor" && hitTestVwap(param.point.x, param.point.y)) {
+        useChartStore.getState().setSettingsTarget("vwap");
+        return;
+      }
+
       if (toolRef.current === "measure") {
         // Anywhere on the pane, including the empty space right of the last bar
         const at = pointAt(param.point.x, param.point.y);
@@ -857,28 +882,19 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           color: TV_COLORS.textMuted,
           priceLineVisible: false,
           lastValueVisible: false,
-          // Cap the scale near the 90th-percentile bar so a single climax spike
-          // clips at the top instead of squashing every normal bar to a sliver.
-          // The cap is computed in updateVolume(), not here: this runs on every
-          // frame while panning, far too often to sort the whole history.
-          autoscaleInfoProvider: (original: () => AutoscaleInfo | null) => {
-            const res = original();
-            const cap = volumeCapRef.current;
-            if (!cap) return res;
-            const currentMax = res?.priceRange?.maxValue ?? cap;
-            return {
-              priceRange: {
-                minValue: 0,
-                maxValue: Math.min(currentMax, cap),
-              },
-            };
-          },
+          // No scale cap: lightweight-charts doesn't clip bars at the edge of
+          // their strip, so anything above a cap shot up into the candles.
+          // Plain autoscale on the visible bars keeps the tallest one exactly
+          // at the top of the strip, as TradingView does.
         },
         0,
       );
-      // Volume lives in a thin strip at the very bottom (~15%) so it never
-      // reaches up into the candles and clutters the price action.
-      v.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+      // Volume lives in a strip along the bottom of the price pane, under the
+      // candles, never reaching up into the price action.
+      v.priceScale().applyOptions({
+        scaleMargins: { top: 1 - VOLUME_STRIP, bottom: 0 },
+        visible: false,
+      });
       volumeSeriesRef.current = v;
       // Volume moving-average line (yellow), on the same volume price scale
       volumeMaRef.current = chartRef.current.addSeries(
@@ -1673,7 +1689,16 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
   useEffect(() => {
     updateSessionLines();
-  }, [indicators.session, hidden.session, config.sessionOffsetMin, timeframe]);
+  }, [
+    indicators.session,
+    hidden.session,
+    config.sessionOffsetMin,
+    config.sessionFlanks,
+    config.sessionClose,
+    config.sessionPreCloseMin,
+    config.sessionMarkets,
+    timeframe,
+  ]);
 
   useEffect(() => {
     updateMACD();
@@ -1822,6 +1847,36 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     const levels = [bar.open, bar.high, bar.low, bar.close];
     const nearest = levels.reduce((best, v) => (Math.abs(v - price) < Math.abs(best - price) ? v : best));
     return { time, price: nearest };
+  }
+
+  /**
+   * Whether a container-relative pixel sits on the VWAP line or any of its
+   * bands (within a few pixels), so clicking one opens the VWAP settings.
+   * Reads each line between the two bars either side of the pointer, so steep
+   * stretches still register.
+   */
+  function hitTestVwap(x: number, y: number): boolean {
+    const chart = chartRef.current;
+    const center = vwapRef.current;
+    if (!chart || !center || !vwapVisibleRef.current) return false;
+    const pane0 = chart.panes()[0];
+    if (!pane0 || y < 0 || y > pane0.getHeight()) return false;
+    const logical = chart.timeScale().coordinateToLogical(x);
+    if (logical === null) return false;
+    const i0 = Math.floor(logical);
+    const frac = logical - i0;
+    const TOLERANCE = 6;
+    for (const line of [center, ...vwapBandRefs.current]) {
+      if (line.options().visible === false) continue;
+      const a = line.dataByIndex(i0);
+      const b = line.dataByIndex(i0 + 1);
+      const ya = a && "value" in a ? line.priceToCoordinate(a.value) : null;
+      const yb = b && "value" in b ? line.priceToCoordinate(b.value) : null;
+      const yLine =
+        ya !== null && yb !== null ? ya + (yb - ya) * frac : (ya ?? yb);
+      if (yLine !== null && Math.abs(yLine - y) <= TOLERANCE) return true;
+    }
+    return false;
   }
 
   /**
@@ -2002,7 +2057,13 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         if (toolNow === "cursor" || toolNow === "eraser") {
           const { x, y } = posOf(e);
           const hit = drawingsLockedRef.current ? null : hitTestDrawings(x, y);
-          el.style.cursor = hit ? (toolNow === "eraser" ? "pointer" : "grab") : "";
+          el.style.cursor = hit
+            ? toolNow === "eraser"
+              ? "pointer"
+              : "grab"
+            : toolNow === "cursor" && hitTestVwap(x, y)
+              ? "pointer"
+              : "";
         }
         return;
       }
@@ -2230,21 +2291,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     }
 
     series.setData(
-      c.map((k, i) => ({
+      c.map((k) => ({
         time: k.time as UTCTimestamp,
         value: k.volume,
-        color: volBarColor(k.close >= k.open, maAt[i] > 0 ? k.volume / maAt[i] : 1),
+        color: volBarColor(k.close >= k.open),
       })),
     );
-
-    // Scale cap near the 90th-percentile bar — only re-sorted when the bar
-    // count changes (a new candle), not on every live tick.
-    if (volumeCapLenRef.current !== c.length) {
-      volumeCapLenRef.current = c.length;
-      const vols = c.map((k) => k.volume).filter((x) => x > 0).sort((a, b) => a - b);
-      volumeCapRef.current =
-        vols.length > 0 ? vols[Math.min(vols.length - 1, Math.floor(vols.length * 0.9))] * 1.4 : 0;
-    }
 
     if (volumeMaRef.current) {
       const line: { time: UTCTimestamp; value: number }[] = [];
@@ -2489,7 +2541,11 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     rsiSegRef.current?.setSegments(segments, true);
   }
 
-  /** Dashed verticals at the New York open and ±`sessionOffsetMin` around it. */
+  /**
+   * Vertical lines for each enabled market's latest session: the open with
+   * dashed ±`sessionOffsetMin` flanks, a dashed line before the close, and the
+   * close itself (placed ahead of the last bar while it's still to come).
+   */
   function updateSessionLines() {
     const prim = sessionRef.current;
     if (!prim) return;
@@ -2505,11 +2561,40 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     const c = candlesRef.current;
     const first = c[0]?.time ?? 0;
     const last = c[c.length - 1]?.time ?? 0;
-    const key = `${Math.floor(first / 86_400)}:${Math.floor(last / 900)}:${cfg.sessionOffsetMin}`;
+    // Bar count is in the key because the future-close anchor is the last
+    // bar's index, which shifts when older history is prepended.
+    const key = [
+      Math.floor(first / 86_400),
+      Math.floor(last / 900),
+      c.length,
+      cfg.sessionOffsetMin,
+      cfg.sessionFlanks,
+      cfg.sessionClose,
+      cfg.sessionPreCloseMin,
+      JSON.stringify(cfg.sessionMarkets),
+    ].join(":");
     if (key === sessionKeyRef.current) return;
     sessionKeyRef.current = key;
 
-    prim.setLines(sessionLines(c, cfg.sessionOffsetMin, SESSION_COLORS), true);
+    const markets = cfg.sessionMarkets.flatMap((m) => {
+      const info = SESSION_MARKETS.find((x) => x.id === m.id);
+      return info && m.enabled
+        ? [{ short: info.short, tz: info.tz, open: m.open, close: m.close, color: m.color }]
+        : [];
+    });
+    const lines = sessionLines(c, markets, {
+      offsetMinutes: cfg.sessionOffsetMin,
+      flanks: cfg.sessionFlanks,
+      close: cfg.sessionClose,
+      preCloseMinutes: cfg.sessionPreCloseMin,
+      flankColor: SESSION_COLORS.flank,
+    });
+    const barSeconds = c.length > 1 ? c[1].time - c[0].time : 0;
+    prim.setLines(
+      lines,
+      true,
+      barSeconds > 0 ? { lastTime: last, lastLogical: c.length - 1, barSeconds } : null,
+    );
   }
 
   function updateMACD() {
@@ -3794,8 +3879,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           {indicators.session && (
             <IndicatorPill
               name="Sesiones de mercado"
-              value={`Nueva York ±${offsetLabel(config.sessionOffsetMin)}`}
-              color={SESSION_COLORS.open}
+              value={sessionPillText(config)}
+              color={
+                config.sessionMarkets.find((m) => m.enabled)?.color ?? SESSION_COLORS.open
+              }
               hidden={hidden.session}
               onToggleHide={() => toggleHidden("session")}
               onSettings={() => setSettingsTarget("session")}

@@ -16,7 +16,10 @@ import {
   DEFAULT_CONFIG,
   MAX_RIBBON_LINES,
   MAX_VWAP_BANDS,
+  SESSION_MARKETS,
+  defaultSessionMarkets,
   type IndicatorKey,
+  type SessionMarketConfig,
 } from "@/lib/store/chart-store";
 
 const TITLES: Record<IndicatorKey, string> = {
@@ -33,7 +36,7 @@ const TITLES: Record<IndicatorKey, string> = {
   wavetrend: "WaveTrend",
   ribbon: "Medias móviles",
   ichimoku: "Ichimoku",
-  session: "Sesión de Nueva York",
+  session: "Sesiones de mercado",
   stochrsi: "Stoch RSI",
   cipher: "Cipher WaveTrend",
 };
@@ -58,7 +61,9 @@ export function IndicatorSettingsDialog() {
       <DialogContent
         className={cn(
           "bg-tv-panel",
-          target === "ribbon" || target === "vwap" ? "max-w-md" : "max-w-sm",
+          target === "ribbon" || target === "vwap" || target === "session"
+            ? "max-w-md"
+            : "max-w-sm",
         )}
       >
         <DialogHeader>
@@ -116,7 +121,13 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
         rsiMaColor: draft.rsiMaColor,
       });
     else if (target === "session")
-      onSave({ sessionOffsetMin: clamp(draft.sessionOffsetMin, 5, 480) });
+      onSave({
+        sessionOffsetMin: clamp(draft.sessionOffsetMin, 5, 480),
+        sessionFlanks: draft.sessionFlanks,
+        sessionClose: draft.sessionClose,
+        sessionPreCloseMin: clamp(draft.sessionPreCloseMin, 0, 480),
+        sessionMarkets: draft.sessionMarkets,
+      });
     else if (target === "macd")
       onSave({
         macdFast: clamp(draft.macdFast, 2, 100),
@@ -272,18 +283,10 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
         </>
       )}
       {target === "session" && (
-        <>
-          <Field
-            label="Minutos antes / después de la apertura"
-            value={draft.sessionOffsetMin}
-            onChange={(n) => setDraft((d) => ({ ...d, sessionOffsetMin: n }))}
-          />
-          <p className="text-xs text-tv-text-muted">
-            Marca la apertura de Nueva York (09:30 hora de NY, con horario de
-            verano incluido) y las líneas de ±{draft.sessionOffsetMin} minutos.
-            Solo se dibujan en temporalidades intradía.
-          </p>
-        </>
+        <SessionSettings
+          draft={draft}
+          onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
+        />
       )}
       {target === "macd" && (
         <div className="grid grid-cols-3 gap-2">
@@ -822,4 +825,178 @@ function Field({
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
+}
+
+type SessionDraft = Pick<
+  typeof DEFAULT_CONFIG,
+  "sessionMarkets" | "sessionOffsetMin" | "sessionFlanks" | "sessionClose" | "sessionPreCloseMin"
+>;
+
+/**
+ * Markets on/off with their color and hours (each in its own local time, so
+ * daylight saving is handled per exchange), plus which lines to draw.
+ */
+function SessionSettings({
+  draft,
+  onChange,
+}: {
+  draft: SessionDraft;
+  onChange: (patch: Partial<SessionDraft>) => void;
+}) {
+  const setMarket = (id: string, patch: Partial<SessionMarketConfig>) =>
+    onChange({
+      sessionMarkets: draft.sessionMarkets.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+    });
+
+  return (
+    <>
+      <div className="flex flex-col gap-1">
+        <div className="grid grid-cols-[1fr_4.75rem_4.75rem] gap-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
+          <span>Mercado</span>
+          <span>Apertura</span>
+          <span>Cierre</span>
+        </div>
+        {draft.sessionMarkets.map((m) => {
+          const info = SESSION_MARKETS.find((x) => x.id === m.id);
+          if (!info) return null;
+          return (
+            <div
+              key={m.id}
+              className={cn(
+                "grid grid-cols-[1fr_4.75rem_4.75rem] items-center gap-2 rounded-md px-1 py-0.5",
+                !m.enabled && "opacity-50",
+              )}
+            >
+              <label className="flex min-w-0 items-center gap-2 text-xs text-tv-text">
+                <input
+                  type="checkbox"
+                  checked={m.enabled}
+                  onChange={(e) => setMarket(m.id, { enabled: e.target.checked })}
+                  className="h-3.5 w-3.5 accent-tv-blue"
+                />
+                <input
+                  type="color"
+                  value={m.color}
+                  onChange={(e) => setMarket(m.id, { color: e.target.value })}
+                  aria-label={`Color de ${info.name}`}
+                  className="h-4 w-5 shrink-0 cursor-pointer rounded border-0 bg-transparent p-0"
+                />
+                <span className="truncate">{info.name}</span>
+              </label>
+              <TimeInput
+                value={m.open}
+                onChange={(v) => setMarket(m.id, { open: v })}
+                label={`Apertura de ${info.name}`}
+              />
+              <TimeInput
+                value={m.close}
+                onChange={(v) => setMarket(m.id, { close: v })}
+                label={`Cierre de ${info.name}`}
+              />
+            </div>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => onChange({ sessionMarkets: defaultSessionMarkets() })}
+          className="self-start px-1 text-[11px] text-tv-text-muted underline-offset-2 hover:text-tv-text hover:underline"
+        >
+          Restablecer horarios y colores
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <label className="col-span-2 flex items-center gap-2 text-xs text-tv-text">
+          <input
+            type="checkbox"
+            checked={draft.sessionFlanks}
+            onChange={(e) => onChange({ sessionFlanks: e.target.checked })}
+            className="h-3.5 w-3.5 accent-tv-blue"
+          />
+          Líneas antes y después de la apertura
+        </label>
+        {draft.sessionFlanks && (
+          <Field
+            label="Minutos ± apertura"
+            value={draft.sessionOffsetMin}
+            onChange={(n) => onChange({ sessionOffsetMin: n })}
+          />
+        )}
+        <label className="col-span-2 flex items-center gap-2 text-xs text-tv-text">
+          <input
+            type="checkbox"
+            checked={draft.sessionClose}
+            onChange={(e) => onChange({ sessionClose: e.target.checked })}
+            className="h-3.5 w-3.5 accent-tv-blue"
+          />
+          Cierre del mercado
+        </label>
+        {draft.sessionClose && (
+          <Field
+            label="Minutos antes del cierre"
+            value={draft.sessionPreCloseMin}
+            onChange={(n) => onChange({ sessionPreCloseMin: n })}
+          />
+        )}
+      </div>
+
+      <p className="text-xs text-tv-text-muted">
+        Los horarios van en la hora local de cada bolsa (el horario de verano se
+        ajusta solo); las etiquetas del gráfico salen en tu hora. Se dibuja la
+        última sesión de cada mercado, sin fines de semana, y el cierre aparece
+        por delante aunque todavía no haya llegado. Pon 0 minutos antes del
+        cierre para quitar esa línea. Solo en temporalidades intradía.
+      </p>
+    </>
+  );
+}
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * 24-hour "HH:MM" box. The native time picker follows the browser's locale
+ * and can show 16:00 as "04:00" (PM cut off), so this stays plain text and
+ * only commits a valid time.
+ */
+function TimeInput({
+  value,
+  onChange,
+  label,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  label: string;
+}) {
+  const [text, setText] = useState(value);
+  const [prev, setPrev] = useState(value);
+  if (value !== prev) {
+    setPrev(value);
+    setText(value);
+  }
+  const valid = HHMM.test(text);
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      maxLength={5}
+      placeholder="HH:MM"
+      value={text}
+      aria-label={label}
+      aria-invalid={!valid}
+      onChange={(e) => {
+        // Typing "930" or "0930" reads as 09:30
+        let v = e.target.value.replace(/[^\d:]/g, "");
+        if (/^\d{3,4}$/.test(v)) v = `${v.slice(0, -2).padStart(2, "0")}:${v.slice(-2)}`;
+        setText(v);
+        if (HHMM.test(v)) onChange(v);
+      }}
+      onBlur={() => {
+        if (!HHMM.test(text)) setText(value);
+      }}
+      className={cn(
+        "h-7 w-full rounded border bg-tv-bg px-2 text-center font-mono text-xs text-tv-text outline-none focus:border-tv-blue",
+        valid ? "border-tv-border" : "border-tv-red",
+      )}
+    />
+  );
 }

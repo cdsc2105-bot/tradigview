@@ -221,6 +221,14 @@ export interface IndicatorConfig {
   rsiMaColor: string;
   /** Minutes before/after the session open for the flanking session lines */
   sessionOffsetMin: number;
+  /** Which markets draw their session, with their color and hours */
+  sessionMarkets: SessionMarketConfig[];
+  /** Dashed ±sessionOffsetMin lines around each open */
+  sessionFlanks: boolean;
+  /** Solid line at each market's close */
+  sessionClose: boolean;
+  /** Dashed line this many minutes before the close (0 = none) */
+  sessionPreCloseMin: number;
   /** Ichimoku Tenkan-sen period */
   ichiTenkan: number;
   /** Ichimoku Kijun-sen period */
@@ -272,6 +280,68 @@ export const DEFAULT_RIBBON_LINES: RibbonLine[] = [
   { period: 200, color: "#3d6ef5", width: 1, enabled: true },
 ];
 
+/** A stock market whose trading session can be drawn on the chart. */
+export interface SessionMarketInfo {
+  id: string;
+  name: string;
+  /** Short tag for line labels: NY, LON, TOK… */
+  short: string;
+  /** IANA zone the hours are in; daylight saving is handled per day */
+  tz: string;
+  /** Regular session hours, local "HH:MM" */
+  open: string;
+  close: string;
+  color: string;
+}
+
+/** Americas, Europe and Asia-Pacific cash sessions, in the order they open. */
+export const SESSION_MARKETS: SessionMarketInfo[] = [
+  { id: "sydney", name: "Sídney", short: "SYD", tz: "Australia/Sydney", open: "10:00", close: "16:00", color: "#fdd835" },
+  { id: "tokyo", name: "Tokio", short: "TOK", tz: "Asia/Tokyo", open: "09:00", close: "15:30", color: "#ef5350" },
+  { id: "hongkong", name: "Hong Kong", short: "HK", tz: "Asia/Hong_Kong", open: "09:30", close: "16:00", color: "#ff9800" },
+  { id: "shanghai", name: "Shanghái", short: "SHA", tz: "Asia/Shanghai", open: "09:30", close: "15:00", color: "#e91e63" },
+  { id: "frankfurt", name: "Fráncfort", short: "FRA", tz: "Europe/Berlin", open: "09:00", close: "17:30", color: "#26a69a" },
+  { id: "london", name: "Londres", short: "LON", tz: "Europe/London", open: "08:00", close: "16:30", color: "#2962ff" },
+  { id: "ny", name: "Nueva York", short: "NY", tz: "America/New_York", open: "09:30", close: "16:00", color: "#7e57c2" },
+];
+
+/** What the user can change per market. */
+export interface SessionMarketConfig {
+  id: string;
+  enabled: boolean;
+  color: string;
+  open: string;
+  close: string;
+}
+
+/** New York on, the rest available — the chart looks as before by default. */
+export function defaultSessionMarkets(): SessionMarketConfig[] {
+  return SESSION_MARKETS.map((m) => ({
+    id: m.id,
+    enabled: m.id === "ny",
+    color: m.color,
+    open: m.open,
+    close: m.close,
+  }));
+}
+
+/** Saved market settings over the catalog: new markets appear, unknown ones drop. */
+export function normalizeSessionMarkets(saved: unknown): SessionMarketConfig[] {
+  const list = Array.isArray(saved) ? (saved as Partial<SessionMarketConfig>[]) : [];
+  const hhmm = /^\d{2}:\d{2}$/;
+  return defaultSessionMarkets().map((d) => {
+    const s = list.find((x) => x?.id === d.id);
+    if (!s) return d;
+    return {
+      id: d.id,
+      enabled: typeof s.enabled === "boolean" ? s.enabled : d.enabled,
+      color: typeof s.color === "string" ? s.color : d.color,
+      open: typeof s.open === "string" && hhmm.test(s.open) ? s.open : d.open,
+      close: typeof s.close === "string" && hhmm.test(s.close) ? s.close : d.close,
+    };
+  });
+}
+
 export const DEFAULT_CONFIG: IndicatorConfig = {
   ema20: 20,
   ema50: 50,
@@ -312,6 +382,10 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   rsiColor: "#d1d4dc",
   rsiMaColor: "#e2c55a",
   sessionOffsetMin: 90,
+  sessionMarkets: defaultSessionMarkets(),
+  sessionFlanks: true,
+  sessionClose: true,
+  sessionPreCloseMin: 60,
   ichiTenkan: 9,
   ichiKijun: 26,
   ichiSenkouB: 52,
@@ -1072,7 +1146,13 @@ export const useChartStore = create<ChartState>()(
           exchange: p.exchange ?? "binance",
           indicators: { ...current.indicators, ...p.indicators },
           hidden: { ...current.hidden, ...p.hidden },
-          config: { ...current.config, ...p.config, ribbonLines, vwapBandLines },
+          config: {
+            ...current.config,
+            ...p.config,
+            ribbonLines,
+            vwapBandLines,
+            sessionMarkets: normalizeSessionMarkets(p.config?.sessionMarkets),
+          },
           watchlist: [...DEFAULT_WATCHLIST, ...extras],
         };
       },
