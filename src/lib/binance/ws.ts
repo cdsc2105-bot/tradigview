@@ -91,11 +91,54 @@ export class BinanceWS {
   private closing = false;
   /** Which of `urls` to use; moves on when a host can't even be reached */
   private urlIndex = 0;
+  /** Last time anything arrived — a live kline stream talks every second or two */
+  private lastMessageAt = 0;
+  private livenessTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly urls: string[] = WS_SPOT) {}
 
+  private get hasSubscriptions() {
+    return this.klineSubs.size + this.tickerSubs.size + this.tradeSubs.size > 0;
+  }
+
+  /**
+   * After sleep, a network change or a frozen background tab a socket can die
+   * without ever firing `close` — it just goes quiet. Treat long silence on an
+   * open, subscribed socket as dead and reconnect.
+   */
+  private checkAlive(maxSilenceMs: number) {
+    if (!this.ws || !this.connected || !this.hasSubscriptions) return;
+    if (Date.now() - this.lastMessageAt > maxSilenceMs) this.reconnectNow();
+  }
+
+  /** Drop the current socket (if any) and connect again right away. */
+  private reconnectNow() {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.reconnectAttempts = 0;
+    const old = this.ws;
+    this.ws = null;
+    this.connected = false;
+    if (old) {
+      old.onclose = null;
+      old.onerror = null;
+      old.onmessage = null;
+      old.close();
+    }
+    this.connect();
+  }
+
+  /** The tab is visible / online again: make sure the stream is really flowing. */
+  wake() {
+    if (this.closing || !this.hasSubscriptions) return;
+    if (!this.ws) this.reconnectNow();
+    else this.checkAlive(4_000);
+  }
+
   connect() {
     if (this.ws || this.closing) return;
+    this.livenessTimer ??= setInterval(() => this.checkAlive(10_000), 3_000);
+    this.lastMessageAt = Date.now();
     this.ws = new WebSocket(this.urls[this.urlIndex]);
     let opened = false;
 
@@ -114,6 +157,7 @@ export class BinanceWS {
     };
 
     this.ws.onmessage = (ev) => {
+      this.lastMessageAt = Date.now();
       try {
         const msg = JSON.parse(ev.data) as WSMsg | { result: unknown; id: number };
         if ("stream" in msg) this.dispatch(msg);
@@ -231,9 +275,21 @@ export class BinanceWS {
   close() {
     this.closing = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.livenessTimer) clearInterval(this.livenessTimer);
     this.ws?.close();
     this.ws = null;
   }
+}
+
+/** Check the sockets whenever the tab comes back into view or goes online. */
+function onWake(ws: BinanceWS) {
+  const wake = () => {
+    if (!document.hidden) ws.wake();
+  };
+  document.addEventListener("visibilitychange", wake);
+  window.addEventListener("focus", wake);
+  window.addEventListener("online", wake);
+  window.addEventListener("pageshow", wake);
 }
 
 // Singletons — one WS connection per venue per browser tab
@@ -246,6 +302,7 @@ export function getBinanceWS(): BinanceWS {
   if (!spotSingleton) {
     spotSingleton = new BinanceWS(WS_SPOT);
     spotSingleton.connect();
+    onWake(spotSingleton);
   }
   return spotSingleton;
 }
@@ -258,6 +315,7 @@ export function getBinanceFuturesWS(): BinanceWS {
   if (!futuresSingleton) {
     futuresSingleton = new BinanceWS(WS_FUTURES);
     futuresSingleton.connect();
+    onWake(futuresSingleton);
   }
   return futuresSingleton;
 }

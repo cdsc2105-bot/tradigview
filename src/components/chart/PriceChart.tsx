@@ -187,6 +187,35 @@ async function fetchCandles(
   endTime?: number,
   onBase?: (base: Candle[]) => void,
 ): Promise<Candle[]> {
+  // A request that never settles would leave the resync/paging guards stuck
+  // (and the chart frozen), so every fetch gets a hard deadline.
+  return withDeadline(fetchCandlesNow(exchange, symbol, timeframe, limit, endTime, onBase), 20_000);
+}
+
+function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+async function fetchCandlesNow(
+  exchange: Exchange,
+  symbol: string,
+  timeframe: Timeframe,
+  limit: number,
+  endTime?: number,
+  onBase?: (base: Candle[]) => void,
+): Promise<Candle[]> {
   const synth = SYNTHETIC_TIMEFRAMES[timeframe];
   if (!synth) {
     return KLINE_FETCHERS[exchange](symbol, timeframe, limit, endTime);
@@ -3071,8 +3100,12 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     // fires if it goes silent. If it never delivers — the WebSocket is blocked
     // on this network — the chart polls every ~2.5s instead (through the server
     // relay if needed), so it stays live either way.
-    let streamAlive = false;
-    const staleMs = () => (exchange !== "bitget" && streamAlive ? 20_000 : 2_000);
+    // Stream counts as alive only while it keeps talking; if it goes quiet
+    // (dead socket after sleep, blocked network) the chart falls back to
+    // polling within a few seconds instead of waiting 20.
+    let lastStreamTick = 0;
+    const staleMs = () =>
+      exchange !== "bitget" && Date.now() - lastStreamTick < 6_000 ? 20_000 : 2_000;
     const watchdog = setInterval(() => {
       if (document.hidden) return; // don't burn requests in background tabs
       if (Date.now() - lastTick > staleMs()) void resync();
@@ -3080,10 +3113,14 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
 
     // Waking the tab or regaining network = deep catch-up to fill any gap.
     const onWake = () => {
-      if (!document.hidden) void resync(true);
+      // Deep catch-up unless the stream has been delivering all along (focus
+      // fires on every click back into the window).
+      if (!document.hidden && Date.now() - lastTick > 3_000) void resync(true);
     };
     document.addEventListener("visibilitychange", onWake);
     window.addEventListener("online", onWake);
+    window.addEventListener("focus", onWake);
+    window.addEventListener("pageshow", onWake);
 
     /**
      * Live updates arrive far faster than the screen refreshes (every trade on
@@ -3192,7 +3229,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
         const handleCandle = (k: Candle) => {
           if (!candleSeriesRef.current) return;
           lastTick = Date.now(); // the stream is alive — hold the watchdog off
-          streamAlive = true;
+          lastStreamTick = lastTick;
           const arr = candlesRef.current;
           const lastCandle = arr[arr.length - 1];
           if (lastCandle && lastCandle.time === k.time) {
@@ -3263,6 +3300,8 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       clearInterval(watchdog);
       document.removeEventListener("visibilitychange", onWake);
       window.removeEventListener("online", onWake);
+      window.removeEventListener("focus", onWake);
+      window.removeEventListener("pageshow", onWake);
       cancelAnimationFrame(frame);
       if (unsub) unsub();
     };
