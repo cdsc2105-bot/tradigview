@@ -1,5 +1,6 @@
 "use client";
 
+import { maLabel } from "@/lib/indicators/movingAverage";
 import { useState } from "react";
 import { Activity, ChevronDown, Settings2 } from "lucide-react";
 import { PopoverHeading, PopoverPanel } from "@/components/ui/popover-panel";
@@ -38,10 +39,11 @@ const GROUPS: { title: string; entries: Entry[] }[] = [
         params: (c) =>
           c.ribbonLines
             .filter((l) => l.enabled)
-            .map((l) => l.period)
+            .map((l) => maLabel(l.type ?? "EMA", l.period, l.tf ?? "chart"))
             .join(" · "),
       },
       { key: "session", label: "Sesiones de mercado" },
+      { key: "prevday", label: "Máximo/Mínimo del día anterior" },
     ],
   },
   {
@@ -59,9 +61,9 @@ const GROUPS: { title: string; entries: Entry[] }[] = [
   {
     title: "Más indicadores",
     entries: [
-      { key: "ema20", label: "EMA", params: (c) => String(c.ema20) },
-      { key: "ema50", label: "EMA", params: (c) => String(c.ema50) },
-      { key: "ema200", label: "EMA", params: (c) => String(c.ema200) },
+      { key: "ema20", label: "Media móvil", params: (c) => maLabel(c.ema20Type ?? "EMA", c.ema20) },
+      { key: "ema50", label: "Media móvil", params: (c) => maLabel(c.ema50Type ?? "EMA", c.ema50) },
+      { key: "ema200", label: "Media móvil", params: (c) => maLabel(c.ema200Type ?? "EMA", c.ema200) },
       {
         key: "stoch",
         label: "Estocástico",

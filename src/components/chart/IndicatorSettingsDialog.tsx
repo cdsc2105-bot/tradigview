@@ -12,6 +12,12 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
+  MA_TIMEFRAMES,
+  MA_TYPES,
+  type MaTimeframe,
+  type MaType,
+} from "@/lib/indicators/movingAverage";
+import {
   useChartStore,
   DEFAULT_CONFIG,
   MAX_RIBBON_LINES,
@@ -23,9 +29,9 @@ import {
 } from "@/lib/store/chart-store";
 
 const TITLES: Record<IndicatorKey, string> = {
-  ema20: "EMA — Slot 1",
-  ema50: "EMA — Slot 2",
-  ema200: "EMA — Slot 3",
+  ema20: "Media móvil 1",
+  ema50: "Media móvil 2",
+  ema200: "Media móvil 3",
   rsi: "RSI",
   macd: "MACD",
   volume: "Volumen",
@@ -37,6 +43,7 @@ const TITLES: Record<IndicatorKey, string> = {
   ribbon: "Medias móviles",
   ichimoku: "Ichimoku",
   session: "Sesiones de mercado",
+  prevday: "Máximo/Mínimo del día anterior",
   stochrsi: "Stoch RSI",
   cipher: "Cipher WaveTrend",
 };
@@ -61,9 +68,12 @@ export function IndicatorSettingsDialog() {
       <DialogContent
         className={cn(
           "bg-tv-panel",
-          target === "ribbon" || target === "vwap" || target === "session"
-            ? "max-w-md"
-            : "max-w-sm",
+          // sm: variants, so they win over the dialog's own sm:max-w-sm
+          target === "ribbon"
+            ? "sm:max-w-xl"
+            : target === "vwap" || target === "session"
+              ? "sm:max-w-md"
+              : "sm:max-w-sm",
         )}
       >
         <DialogHeader>
@@ -106,9 +116,9 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
   }, [config, target]);
 
   function save() {
-    if (target === "ema20") onSave({ ema20: clamp(draft.ema20, 2, 500) });
-    else if (target === "ema50") onSave({ ema50: clamp(draft.ema50, 2, 500) });
-    else if (target === "ema200") onSave({ ema200: clamp(draft.ema200, 2, 500) });
+    if (target === "ema20") onSave({ ema20: clamp(draft.ema20, 1, 500), ema20Type: draft.ema20Type });
+    else if (target === "ema50") onSave({ ema50: clamp(draft.ema50, 1, 500), ema50Type: draft.ema50Type });
+    else if (target === "ema200") onSave({ ema200: clamp(draft.ema200, 1, 500), ema200Type: draft.ema200Type });
     else if (target === "rsi")
       onSave({
         rsi: clamp(draft.rsi, 2, 100),
@@ -120,6 +130,7 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
         rsiColor: draft.rsiColor,
         rsiMaColor: draft.rsiMaColor,
       });
+    else if (target === "prevday") onSave({ prevDayLines: draft.prevDayLines });
     else if (target === "session")
       onSave({
         sessionOffsetMin: clamp(draft.sessionOffsetMin, 5, 480),
@@ -181,11 +192,31 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
   return (
     <div className="flex flex-col gap-3">
       {(target === "ema20" || target === "ema50" || target === "ema200") && (
-        <Field
-          label="Período"
-          value={draft[target]}
-          onChange={(n) => setDraft((d) => ({ ...d, [target]: n }))}
-        />
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
+              Tipo
+            </span>
+            <select
+              value={draft[`${target}Type`] ?? "EMA"}
+              onChange={(e) =>
+                setDraft((d) => ({ ...d, [`${target}Type`]: e.target.value as MaType }))
+              }
+              className="h-9 rounded-md border border-tv-border bg-tv-bg px-2 text-sm text-tv-text"
+            >
+              {MA_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Field
+            label="Período"
+            value={draft[target]}
+            onChange={(n) => setDraft((d) => ({ ...d, [target]: n }))}
+          />
+        </div>
       )}
       {target === "rsi" && (
         <>
@@ -279,6 +310,25 @@ function SettingsForm({ target, config, onSave, onReset }: FormProps) {
             Un pivote solo se confirma cuando pasan los bares de la derecha, así
             que la etiqueta aparece unas velas por detrás. Divergencia regular = posible giro; oculta = probable
             continuación.
+          </p>
+        </>
+      )}
+      {target === "prevday" && (
+        <>
+          <label className="flex items-center gap-2 text-xs text-tv-text">
+            <input
+              type="checkbox"
+              checked={draft.prevDayLines}
+              onChange={(e) => setDraft((d) => ({ ...d, prevDayLines: e.target.checked }))}
+              className="h-3.5 w-3.5 accent-tv-blue"
+            />
+            Dibujar la línea a lo ancho del gráfico
+          </label>
+          <p className="text-xs text-tv-text-muted">
+            Máximo y mínimo del día anterior (UTC), con su etiqueta en el eje.
+            En rojo &quot;No Tomado&quot; mientras el precio de hoy no lo haya
+            tocado; en verde &quot;Tomado&quot; en cuanto lo toca. Solo en
+            temporalidades de un día o menos.
           </p>
         </>
       )}
@@ -472,9 +522,11 @@ function RibbonEditor() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-1.5">
-        <div className="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
+        <div className="grid grid-cols-[auto_4.8rem_minmax(3.5rem,1fr)_5.4rem_auto_auto_auto] items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-tv-text-muted">
           <span className="w-4" />
+          <span>Tipo</span>
           <span>Período</span>
+          <span>Tiempo</span>
           <span>Color</span>
           <span>Grosor</span>
           <span className="w-6" />
@@ -483,12 +535,12 @@ function RibbonEditor() {
         {lines.map((line, i) => (
           <div
             key={i}
-            className="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2"
+            className="grid grid-cols-[auto_4.8rem_minmax(3.5rem,1fr)_5.4rem_auto_auto_auto] items-center gap-1.5"
           >
             <button
               onClick={() => setRibbonLine(i, { enabled: !line.enabled })}
-              title={line.enabled ? "Ocultar esta EMA" : "Mostrar esta EMA"}
-              aria-label={line.enabled ? "Ocultar EMA" : "Mostrar EMA"}
+              title={line.enabled ? "Ocultar esta media" : "Mostrar esta media"}
+              aria-label={line.enabled ? "Ocultar media" : "Mostrar media"}
               className="text-tv-text-muted hover:text-tv-text"
             >
               {line.enabled ? (
@@ -497,6 +549,22 @@ function RibbonEditor() {
                 <EyeOff className="h-3.5 w-3.5" />
               )}
             </button>
+
+            <select
+              value={line.type ?? "EMA"}
+              onChange={(e) => setRibbonLine(i, { type: e.target.value as MaType })}
+              aria-label={`Tipo de la media ${i + 1}`}
+              className={cn(
+                "h-8 rounded border border-tv-border bg-tv-bg px-1 text-xs text-tv-text",
+                !line.enabled && "opacity-50",
+              )}
+            >
+              {MA_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.value}
+                </option>
+              ))}
+            </select>
 
             <Input
               type="number"
@@ -513,11 +581,28 @@ function RibbonEditor() {
               )}
             />
 
+            <select
+              value={line.tf ?? "chart"}
+              onChange={(e) => setRibbonLine(i, { tf: e.target.value as MaTimeframe })}
+              aria-label={`Temporalidad de la media ${i + 1}`}
+              title="Temporalidad en la que se calcula"
+              className={cn(
+                "h-8 rounded border border-tv-border bg-tv-bg px-1 text-xs text-tv-text",
+                !line.enabled && "opacity-50",
+              )}
+            >
+              {MA_TIMEFRAMES.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+
             <input
               type="color"
               value={line.color}
               onChange={(e) => setRibbonLine(i, { color: e.target.value })}
-              aria-label={`Color de la EMA ${line.period}`}
+              aria-label={`Color de la media ${i + 1}`}
               className="h-8 w-8 cursor-pointer rounded border border-tv-border bg-tv-bg p-0.5"
             />
 
@@ -526,7 +611,7 @@ function RibbonEditor() {
               onChange={(e) =>
                 setRibbonLine(i, { width: parseInt(e.target.value, 10) })
               }
-              aria-label={`Grosor de la EMA ${line.period}`}
+              aria-label={`Grosor de la media ${i + 1}`}
               className="h-8 rounded border border-tv-border bg-tv-bg px-1.5 text-xs text-tv-text"
             >
               {[1, 2, 3, 4].map((w) => (
@@ -539,8 +624,8 @@ function RibbonEditor() {
             <button
               onClick={() => removeRibbonLine(i)}
               disabled={lines.length <= 1}
-              title="Quitar esta EMA"
-              aria-label="Quitar EMA"
+              title="Quitar esta media"
+              aria-label="Quitar media"
               className="rounded p-1 text-tv-text-muted hover:bg-tv-bg hover:text-tv-red disabled:cursor-not-allowed disabled:opacity-30"
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -557,7 +642,7 @@ function RibbonEditor() {
         className="justify-start gap-1.5 text-tv-text-muted hover:text-tv-text disabled:opacity-40"
       >
         <Plus className="h-3.5 w-3.5" />
-        Agregar EMA ({lines.length}/{MAX_RIBBON_LINES})
+        Agregar media ({lines.length}/{MAX_RIBBON_LINES})
       </Button>
 
       <div className="flex flex-col gap-2 border-t border-tv-border pt-3">
@@ -568,7 +653,7 @@ function RibbonEditor() {
             onChange={(e) => setConfig({ ribbonFill: e.target.checked })}
             className="h-3.5 w-3.5 accent-tv-blue"
           />
-          Rellenar el área entre la EMA más rápida y la más lenta
+          Rellenar el área entre la primera y la última media
         </label>
 
         {config.ribbonFill && (
@@ -592,9 +677,11 @@ function RibbonEditor() {
       </div>
 
       <p className="text-xs text-tv-text-muted">
-        Precio sobre la cinta con las EMAs abiertas hacia arriba = sesgo alcista.
-        Por debajo y apuntando abajo = bajista. EMAs enredadas = rango, mejor no
-        forzar la entrada.
+        Cada media puede ser SMA, EMA, WMA, RMA, HMA o VWMA y calcularse en la
+        temporalidad del gráfico o en una mayor (1H, 4H, 1D, 1S, 1M); las de
+        temporalidad mayor usan la última vela cerrada, así que no repintan.
+        Precio sobre las medias abiertas hacia arriba = sesgo alcista; por
+        debajo y apuntando abajo = bajista; enredadas = rango.
       </p>
 
       <div className="mt-1 flex items-center justify-between">

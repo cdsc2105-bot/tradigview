@@ -1,5 +1,6 @@
 "use client";
 
+import type { MaTimeframe, MaType } from "@/lib/indicators/movingAverage";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Timeframe } from "@/lib/binance/types";
@@ -54,6 +55,7 @@ export type IndicatorKey =
   | "ribbon"
   | "ichimoku"
   | "session"
+  | "prevday"
   | "stochrsi"
   | "cipher";
 
@@ -70,6 +72,7 @@ export const LAYOUT_LABELS: Record<LayoutKey, string> = {
 };
 
 const NO_INDICATORS: Record<IndicatorKey, boolean> = {
+  prevday: false,
   ema20: false,
   ema50: false,
   ema200: false,
@@ -102,6 +105,7 @@ export const LAYOUT_PRESETS: Record<LayoutKey, Record<IndicatorKey, boolean>> = 
     volume: true,
     ribbon: true,
     session: true,
+    prevday: true,
     rsi: true,
     stochrsi: true,
   },
@@ -177,6 +181,10 @@ export interface IndicatorConfig {
   ema20: number;
   ema50: number;
   ema200: number;
+  /** Type of each single moving-average slot (SMA, EMA, …) */
+  ema20Type: MaType;
+  ema50Type: MaType;
+  ema200Type: MaType;
   rsi: number;
   macdFast: number;
   macdSlow: number;
@@ -228,6 +236,8 @@ export interface IndicatorConfig {
   rsiMaColor: string;
   /** Minutes before/after the session open for the flanking session lines */
   sessionOffsetMin: number;
+  /** Previous day's high/low: draw the line across the chart (else axis label only) */
+  prevDayLines: boolean;
   /** Which markets draw their session, with their color and hours */
   sessionMarkets: SessionMarketConfig[];
   /** Dashed ±sessionOffsetMin lines around each open */
@@ -277,9 +287,13 @@ export interface RibbonLine {
   /** Stroke width in px, 1–4 */
   width: number;
   enabled: boolean;
+  /** SMA, EMA, WMA, RMA, HMA or VWMA (missing on old saves → EMA) */
+  type?: MaType;
+  /** Timeframe it's computed on (missing → the chart's) */
+  tf?: MaTimeframe;
 }
 
-export const MAX_RIBBON_LINES = 8;
+export const MAX_RIBBON_LINES = 10;
 
 export const DEFAULT_RIBBON_LINES: RibbonLine[] = [
   { period: 20, color: "#4caf50", width: 1, enabled: true },
@@ -353,6 +367,9 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   ema20: 20,
   ema50: 50,
   ema200: 200,
+  ema20Type: "EMA",
+  ema50Type: "EMA",
+  ema200Type: "EMA",
   // 6 (not the classic 14): the RSI plunges deep into the oversold zone on
   // sharp moves — the shorter period is what makes it reactive.
   rsi: 6,
@@ -389,6 +406,7 @@ export const DEFAULT_CONFIG: IndicatorConfig = {
   rsiColor: "#d1d4dc",
   rsiMaColor: "#e2c55a",
   sessionOffsetMin: 90,
+  prevDayLines: true,
   sessionMarkets: defaultSessionMarkets(),
   sessionFlanks: true,
   sessionClose: true,
@@ -428,6 +446,7 @@ export const INDICATOR_COLORS: Record<IndicatorKey, string> = {
   ribbon: "#22d3ee",
   ichimoku: "#26a69a",
   session: "#2962ff",
+  prevday: "#ef4b5a",
   cipher: "#4994ec",
 };
 
@@ -690,6 +709,7 @@ export const useChartStore = create<ChartState>()(
         ribbon: false,
         ichimoku: false,
         session: false,
+        prevday: false,
         stochrsi: false,
         cipher: false,
       },
@@ -787,6 +807,8 @@ export const useChartStore = create<ChartState>()(
             color: "#787b86",
             width: 2,
             enabled: true,
+            type: slowest?.type ?? "EMA",
+            tf: "chart",
           };
           return {
             config: { ...s.config, ribbonLines: [...s.config.ribbonLines, next] },

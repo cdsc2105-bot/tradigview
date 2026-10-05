@@ -31,7 +31,6 @@ import {
   makeBucketAggregator,
 } from "@/lib/aggregate";
 import {
-  ema,
   rsi,
   rsiDivergences,
   smoothSMA,
@@ -84,6 +83,7 @@ import { formatVolume } from "@/lib/format";
 import { formatPriceFor, precisionFor } from "@/lib/precision";
 import { cn } from "@/lib/utils";
 import { IndicatorPill } from "./IndicatorPill";
+import { maLabel, movingAverage } from "@/lib/indicators/movingAverage";
 import { DrawingEngine, DRAWING_COLORS as ENGINE_COLORS, setDrawingEngine } from "@/components/drawing/engine";
 import type { Drawing } from "@/components/drawing/tools";
 import { timeframeLabel } from "./TimeframeSelector";
@@ -579,6 +579,10 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   vwapVisibleRef.current = indicators.vwap && !hidden.vwap;
   const ichiVisibleRef = useRef(false);
   ichiVisibleRef.current = indicators.ichimoku && !hidden.ichimoku;
+  /** Previous day's high / low price lines on the candles */
+  const prevDayLinesRef = useRef<IPriceLine[]>([]);
+  const prevDayVisibleRef = useRef(false);
+  prevDayVisibleRef.current = indicators.prevday && !hidden.prevday;
   const sessionVisibleRef = useRef(false);
   sessionVisibleRef.current = indicators.session && !hidden.session;
   const hiddenRef = useRef(hidden);
@@ -886,6 +890,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       chart.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;
+      prevDayLinesRef.current = [];
       volumeSeriesRef.current = null;
       volumeMaRef.current = null;
       priceLinesMapRef.current.clear();
@@ -2313,6 +2318,11 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
   // A selection belongs to the symbol it was made on
   useEffect(() => () => setSelected(null), [symbol]);
 
+  useEffect(() => {
+    updatePrevDay();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indicators.prevday, hidden.prevday, config.prevDayLines]);
+
   // Each symbol keeps its own drawings
   useEffect(() => {
     drawingRef.current?.setStoreKey(symbol, () => carryOverDrawings(symbol));
@@ -2397,21 +2407,21 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     let last200: number | undefined;
 
     if (ema20Ref.current) {
-      const data = ema(c, cfg.ema20);
+      const data = movingAverage(c, cfg.ema20, cfg.ema20Type ?? "EMA");
       ema20Ref.current.setData(
         data.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })),
       );
       last20 = data.at(-1)?.value;
     }
     if (ema50Ref.current) {
-      const data = ema(c, cfg.ema50);
+      const data = movingAverage(c, cfg.ema50, cfg.ema50Type ?? "EMA");
       ema50Ref.current.setData(
         data.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })),
       );
       last50 = data.at(-1)?.value;
     }
     if (ema200Ref.current) {
-      const data = ema(c, cfg.ema200);
+      const data = movingAverage(c, cfg.ema200, cfg.ema200Type ?? "EMA");
       ema200Ref.current.setData(
         data.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })),
       );
@@ -2434,7 +2444,9 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     const lines = cfg.ribbonLines;
 
     // Compute every line once — reused for the series, the pill and the fill.
-    const series = lines.map((line) => ema(c, line.period));
+    const series = lines.map((line) =>
+      movingAverage(c, line.period, line.type ?? "EMA", line.tf ?? "chart"),
+    );
     series.forEach((data, i) => {
       ribbonRefs.current[i]?.setData(
         data.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })),
@@ -2668,6 +2680,67 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
       true,
       barSeconds > 0 ? { lastTime: last, lastLogical: c.length - 1, barSeconds } : null,
     );
+  }
+
+  /**
+   * CdeCripto's "Máximo/Mínimo del día anterior": yesterday's (UTC) high and
+   * low as price lines, red "No Tomado" until today's price reaches them and
+   * green "Tomado" once it has.
+   */
+  function updatePrevDay() {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+    const clear = () => {
+      for (const l of prevDayLinesRef.current) series.removePriceLine(l);
+      prevDayLinesRef.current = [];
+    };
+    const c = candlesRef.current;
+    const last = c[c.length - 1];
+    const barSec = c.length > 1 ? c[c.length - 1].time - c[c.length - 2].time : 0;
+    if (!prevDayVisibleRef.current || !last || barSec <= 0 || barSec > 86_400) {
+      clear();
+      return;
+    }
+    const today = Math.floor(last.time / 86_400) * 86_400;
+    const yesterday = today - 86_400;
+    let high = -Infinity;
+    let low = Infinity;
+    let highTaken = false;
+    let lowTaken = false;
+    for (const k of c) {
+      if (k.time >= yesterday && k.time < today) {
+        high = Math.max(high, k.high);
+        low = Math.min(low, k.low);
+      }
+    }
+    if (!Number.isFinite(high) || !Number.isFinite(low)) {
+      clear();
+      return;
+    }
+    for (const k of c) {
+      if (k.time < today) continue;
+      if (k.high >= high) highTaken = true;
+      if (k.low <= low) lowTaken = true;
+    }
+    const cfg = configRef.current;
+    const levels = [
+      { price: high, taken: highTaken, label: highTaken ? "Alto Tomado" : "Alto No Tomado" },
+      { price: low, taken: lowTaken, label: lowTaken ? "Bajo Tomado" : "Bajo No Tomado" },
+    ];
+    levels.forEach((lv, i) => {
+      const options = {
+        price: lv.price,
+        color: lv.taken ? TV_COLORS.green : TV_COLORS.red,
+        title: lv.label,
+        lineWidth: 1 as const,
+        lineStyle: 2,
+        lineVisible: cfg.prevDayLines,
+        axisLabelVisible: true,
+      };
+      const existing = prevDayLinesRef.current[i];
+      if (existing) existing.applyOptions(options);
+      else prevDayLinesRef.current[i] = series.createPriceLine(options);
+    });
   }
 
   function updateMACD() {
@@ -3203,6 +3276,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
     updateCipher();
     updateIchimoku();
     updateSessionLines();
+    updatePrevDay();
     drawingRef.current?.setData(candlesRef.current);
   }
 
@@ -3937,7 +4011,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
               value={[
                 config.ribbonLines
                   .filter((l) => l.enabled)
-                  .map((l) => l.period)
+                  .map((l) => maLabel(l.type ?? "EMA", l.period, l.tf ?? "chart"))
                   .join(" · "),
                 ribbonBias,
               ]
@@ -3963,9 +4037,19 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
               onRemove={() => removeIndicator("session")}
             />
           )}
+          {indicators.prevday && (
+            <IndicatorPill
+              name="Máximo/Mínimo del día anterior"
+              color={INDICATOR_COLORS.prevday}
+              hidden={hidden.prevday}
+              onToggleHide={() => toggleHidden("prevday")}
+              onSettings={() => setSettingsTarget("prevday")}
+              onRemove={() => removeIndicator("prevday")}
+            />
+          )}
           {indicators.ema20 && (
             <IndicatorPill
-              name={`EMA ${config.ema20}`}
+              name={maLabel(config.ema20Type ?? "EMA", config.ema20)}
               value={lastValues.ema20 !== undefined ? formatPriceFor(exchange, symbol, lastValues.ema20) : undefined}
               color={INDICATOR_COLORS.ema20}
               hidden={hidden.ema20}
@@ -3976,7 +4060,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           )}
           {indicators.ema50 && (
             <IndicatorPill
-              name={`EMA ${config.ema50}`}
+              name={maLabel(config.ema50Type ?? "EMA", config.ema50)}
               value={lastValues.ema50 !== undefined ? formatPriceFor(exchange, symbol, lastValues.ema50) : undefined}
               color={INDICATOR_COLORS.ema50}
               hidden={hidden.ema50}
@@ -3987,7 +4071,7 @@ export function PriceChart({ symbol, timeframe, exchange }: Props) {
           )}
           {indicators.ema200 && (
             <IndicatorPill
-              name={`EMA ${config.ema200}`}
+              name={maLabel(config.ema200Type ?? "EMA", config.ema200)}
               value={lastValues.ema200 !== undefined ? formatPriceFor(exchange, symbol, lastValues.ema200) : undefined}
               color={INDICATOR_COLORS.ema200}
               hidden={hidden.ema200}
